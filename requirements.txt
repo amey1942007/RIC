@@ -1,0 +1,9 @@
+numpy>=1.24
+scipy>=1.11
+torch>=2.0
+silero-vad>=5.1
+sounddevice>=0.4.6
+soundfile>=0.12
+onnxruntime>=1.16
+# Pi pan-tilt HAT (optional — install script adds this on aarch64):
+# adafruit-circuitpython-servokit

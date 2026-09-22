@@ -1,0 +1,76 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	/*
+	 * RIC 4× INMP441 on Raspberry Pi 5 (RP1 I2S0)
+	 *
+	 *   SCK  -> GPIO18 (pin 12)   shared
+	 *   WS   -> GPIO19 (pin 35)   shared
+	 *   SD1  -> GPIO20 (pin 38)   M0 (L/GND) + M1 (R/3V3)
+	 *   SD2  -> GPIO22 (pin 15)   M2 (L/GND) + M3 (R/3V3)
+	 *
+	 * Do NOT use GPIO21 for mic data — that pin is I2S0_SDO0 (TX only).
+	 */
+
+	fragment@0 {
+		target = <&gpio>;
+		__overlay__ {
+			ric_i2s0_4ch_pins: ric_i2s0_4ch_pins {
+				function = "i2s0";
+				pins = "gpio18", "gpio19", "gpio20", "gpio22";
+				bias-disable;
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&i2s_clk_producer>;
+		__overlay__ {
+			#sound-dai-cells = <0>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&ric_i2s0_4ch_pins>;
+			status = "okay";
+		};
+	};
+
+	fragment@2 {
+		target-path = "/";
+		__overlay__ {
+			ric_dmic: dmic-codec {
+				#sound-dai-cells = <0>;
+				compatible = "dmic-codec";
+				num-channels = <4>;
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@3 {
+		target = <&sound>;
+		__overlay__ {
+			compatible = "simple-audio-card";
+			simple-audio-card,name = "ric-inmp441-4ch";
+			simple-audio-card,format = "i2s";
+			status = "okay";
+
+			simple-audio-card,bitclock-master = <&ric_cpu>;
+			simple-audio-card,frame-master = <&ric_cpu>;
+
+			ric_cpu: simple-audio-card,cpu {
+				sound-dai = <&i2s_clk_producer>;
+				dai-tdm-slot-num = <2>;
+				dai-tdm-slot-width = <32>;
+			};
+
+			simple-audio-card,codec {
+				sound-dai = <&ric_dmic>;
+				dai-tdm-slot-num = <2>;
+				dai-tdm-slot-width = <32>;
+			};
+		};
+	};
+};
