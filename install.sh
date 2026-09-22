@@ -26,10 +26,16 @@ if command -v apt-get >/dev/null 2>&1; then
   echo "==> apt packages"
   sudo apt-get update -qq
   sudo apt-get install -y -qq \
-    python3-venv python3-pip python3-tk \
-    libportaudio2 portaudio19-dev \
+    python3-venv python3-pip python3-tk python3-smbus \
+    i2c-tools libportaudio2 portaudio19-dev \
     device-tree-compiler \
     liblgpio-dev python3-lgpio swig || true
+
+  # Enable I2C for Waveshare Pan-Tilt HAT (PCA9685 @ 0x40)
+  if command -v raspi-config >/dev/null 2>&1; then
+    echo "==> enabling I2C (Waveshare HAT)"
+    sudo raspi-config nonint do_i2c 0 || true
+  fi
 fi
 
 # Virtualenv
@@ -52,8 +58,10 @@ PY
 
 ARCH="$(uname -m || true)"
 if [[ "$ARCH" == "aarch64" || "$ARCH" == "armv7l" ]]; then
-  echo "==> Pi extras (ServoKit)"
-  python -m pip install adafruit-circuitpython-servokit || true
+  echo "==> Pi extras (Waveshare Pan-Tilt HAT / Blinka / ServoKit)"
+  python -m pip install adafruit-blinka adafruit-circuitpython-servokit \
+    adafruit-circuitpython-pca9685 smbus2 || true
+  echo "    Check HAT: sudo i2cdetect -y 1   (expect 0x40)"
 fi
 
 echo "==> preload Silero VAD model"
@@ -85,6 +93,8 @@ fi
 mkdir -p "$ROOT/data"
 echo ""
 echo "Done."
-echo "  GUI:      ./run_gui.sh"
-echo "  Headless: .venv/bin/python vad_srp_phat_pipeline.py --no-gui"
+echo "  GUI:      ./run_gui.sh --real-servos"
+echo "  Headless: .venv/bin/python vad_srp_phat_pipeline.py --no-gui --real-servos"
 echo "  Mics:     .venv/bin/python scripts/check_rpi_4ch_mics.py"
+echo "  HAT home: .venv/bin/python scripts/home_pantilt.py   # BEFORE assembling servos"
+echo "  HAT test: .venv/bin/python scripts/test_pantilt.py"

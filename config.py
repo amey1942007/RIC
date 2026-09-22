@@ -68,9 +68,12 @@ KALMAN_Q_POS = 0.5            # process noise on angle (deg²)
 KALMAN_Q_VEL = 2.0            # process noise on velocity
 KALMAN_R = 25.0               # measurement noise (high → trust model more)
 
-# ── Servo / pan-tilt ───────────────────────────────────────────────────────
-PAN_CHANNEL = 1               # MG90S
-TILT_CHANNEL = 0              # SG90
+# ── Servo / Waveshare Pan-Tilt HAT (PCA9685) ───────────────────────────────
+# https://www.waveshare.com/wiki/Pan-Tilt_HAT
+#   S0 = tilt, S1 = pan, I2C addr 0x40
+PCA9685_ADDRESS = 0x40
+TILT_CHANNEL = 0              # Waveshare S0 (tilt servo B)
+PAN_CHANNEL = 1               # Waveshare S1 (pan servo A)
 PAN_MIN_DEG = 20.0
 PAN_MAX_DEG = 160.0
 TILT_MIN_DEG = 30.0

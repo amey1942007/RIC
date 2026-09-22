@@ -5,5 +5,8 @@ silero-vad>=5.1
 sounddevice>=0.4.6
 soundfile>=0.12
 onnxruntime>=1.16
-# Pi pan-tilt HAT (optional — install script adds this on aarch64):
+smbus2>=0.4
+# Pi Waveshare Pan-Tilt HAT (install.sh adds on aarch64):
+# adafruit-blinka
 # adafruit-circuitpython-servokit
+# adafruit-circuitpython-pca9685
