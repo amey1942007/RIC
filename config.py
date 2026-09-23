@@ -76,6 +76,7 @@ CONFIDENCE_MOVE_THRESHOLD = 0.65  # only move HAT above this
 SRP_MEDIAN_WINDOW = 5         # median of last N peaks before Kalman
 SRP_MAX_JUMP_DEG = 25.0       # reject single-frame outliers vs last good
 SRP_REJECT_EDGE = True        # discard peaks pinned at the grid edge (±AZIMUTH_MAX) — geometry mismatch artefact
+SRP_GCC_UPSAMPLE = 8          # lag-domain upsampling of GCC-PHAT (sub-sample TDOA; 6 cm @ 16 kHz is only ±2.8 samples)
 BEARING_HOLD_DEG = 4.0        # ignore SRP updates smaller than this (stops spin on a static talker)
 SRP_ADAPTIVE_SEARCH = True    # coarse-to-fine search (False = legacy full dense grid)
 SRP_COARSE_STEP_MULTIPLIER = 3  # pass-1 step = this × AZIMUTH/ELEVATION_STEP_DEG

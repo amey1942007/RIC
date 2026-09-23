@@ -81,6 +81,12 @@ class SRPPhatLocalizer:
             ),
         )
 
+        # GCC lag-domain upsampling (zero-padded IFFT = band-limited sinc interpolation).
+        # A 6 cm pair spans only ±2.8 samples at 16 kHz; with whole-sample GCC and linear
+        # interpolation a PHAT peak at a fractional delay snaps to the nearest integer lag,
+        # which pushes the SRP maximum to the grid edge (measured: ±90° pin on the Pi).
+        self.upsample = max(1, int(getattr(cfg, "SRP_GCC_UPSAMPLE", 8)))
+
         self.mic_ids = sorted(mic_positions.keys())
         if len(self.mic_ids) < 2:
             raise ValueError("need at least 2 microphones")
@@ -168,7 +174,8 @@ class SRPPhatLocalizer:
     # ── PHAT GCC ───────────────────────────────────────────────────────────
     def _gcc_phat(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         """
-        Return circular GCC-PHAT correlation (length n_fft).
+        Return circular GCC-PHAT correlation, upsampled ``self.upsample``×
+        (length n_fft × upsample; lag k corresponds to k / upsample samples).
 
         Bins outside ``config.SRP_BAND_HZ`` are zeroed: below ~300 Hz a 6 cm
         aperture has essentially no phase resolution and the Pi capture is
@@ -182,7 +189,9 @@ class SRPPhatLocalizer:
         denom[denom < 1e-12] = 1e-12
         R /= denom  # PHAT weighting
         R *= self._band_mask()
-        cc = irfft(R, n=n)
+        # Zero-padding the spectrum before the inverse FFT interpolates the lag
+        # domain (sinc), giving sub-sample peak positions.
+        cc = irfft(R, n=n * self.upsample) * self.upsample
         return cc
 
     def _band_mask(self) -> np.ndarray:
@@ -209,10 +218,10 @@ class SRPPhatLocalizer:
         For cc = irfft(Xi * conj(Xj)), if channel j is delayed by +d samples
         relative to i, the peak sits at index (-d) % n (NumPy FFT convention).
         ``delay_samples`` stores physical (τ_j - τ_i)*fs = ((r_i-r_j)·û/c)*fs,
-        so we read cc at (-delay_samples) % n.
+        so we read cc at (-delay_samples × upsample) % n.
         """
         n = len(cc)
-        idx = (-delay_samples) % n
+        idx = (-delay_samples * self.upsample) % n
         i0 = int(np.floor(idx)) % n
         i1 = (i0 + 1) % n
         frac = idx - np.floor(idx)
@@ -247,7 +256,7 @@ class SRPPhatLocalizer:
                 ie = np.clip(ie_idx + de, 0, n_el - 1)
                 # (na, ne, n_pairs) expected delays
                 T = self.tdoa_samples[np.ix_(ia, ie)]
-                idx = (-T) % n_lags
+                idx = (-T * self.upsample) % n_lags
                 i0 = np.floor(idx).astype(np.int64) % n_lags
                 i1 = (i0 + 1) % n_lags
                 frac = idx - np.floor(idx)
