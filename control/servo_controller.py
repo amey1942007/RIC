@@ -135,10 +135,13 @@ class ServoController:
     @staticmethod
     def map_angles(azimuth_deg: float, elevation_deg: float) -> Tuple[float, float]:
         """
-        SRP azimuth/elevation → Waveshare pan/tilt degrees (0..180).
+        SRP azimuth/elevation → Waveshare pan/tilt degrees.
 
-        Azimuth AZ_MIN..AZ_MAX → pan PAN_MIN..PAN_MAX (S1)
-        Elevation depends on ARRAY_MOUNT for tilt (S0)
+        Pan: az -90..+90 → PAN_MIN..PAN_MAX (front → mid pan)
+
+        Tilt (this hardware: 80=top/up, 180=bottom/down):
+          TILT_INVERTED=True  → el up → toward TILT_MIN (80)
+                              → el down → toward TILT_MAX (180)
         """
         az = float(np_clip(azimuth_deg, cfg.AZIMUTH_MIN_DEG, cfg.AZIMUTH_MAX_DEG))
         el = float(np_clip(elevation_deg, cfg.ELEVATION_MIN_DEG, cfg.ELEVATION_MAX_DEG))
@@ -150,7 +153,11 @@ class ServoController:
 
         el_span = cfg.ELEVATION_MAX_DEG - cfg.ELEVATION_MIN_DEG
         el_norm = (el - cfg.ELEVATION_MIN_DEG) / el_span if el_span else 0.0
-        if getattr(cfg, "ARRAY_MOUNT", "vertical_stand") == "ceiling":
+        # Also invert for ceiling mount (looking down into room)
+        invert = bool(getattr(cfg, "TILT_INVERTED", False)) or (
+            getattr(cfg, "ARRAY_MOUNT", "vertical_stand") == "ceiling"
+        )
+        if invert:
             tilt = cfg.TILT_MAX_DEG - el_norm * (cfg.TILT_MAX_DEG - cfg.TILT_MIN_DEG)
         else:
             tilt = cfg.TILT_MIN_DEG + el_norm * (cfg.TILT_MAX_DEG - cfg.TILT_MIN_DEG)

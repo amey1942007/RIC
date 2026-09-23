@@ -71,8 +71,10 @@ TILT_CHANNEL = 0              # S0
 PAN_CHANNEL = 1               # S1
 PAN_MIN_DEG = 20.0            # <-- set after interactive probe
 PAN_MAX_DEG = 160.0
-TILT_MIN_DEG = 30.0
-TILT_MAX_DEG = 150.0
+# Hardware: 80 = look up (top), 180 = look down (bottom)
+TILT_MIN_DEG = 80.0
+TILT_MAX_DEG = 180.0
+TILT_INVERTED = True          # True → higher elevation → smaller PWM (toward 80)
 DEAD_ZONE_DEG = 4.0
 SERVO_MAX_SPEED_DEG_S = 35.0
 SERVO_EMA_ALPHA = 0.18
