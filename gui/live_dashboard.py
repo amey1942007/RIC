@@ -12,11 +12,13 @@ Live control-room GUI for the lecturer-tracking pipeline.
 
 Interactive:
   • MIC ON/OFF   — mute the array (drops the track, HAT holds position)
+  • PERSON ON/OFF — lock onto a talker after ~6 s of stable speech; fused
+                    audio+face while locked; unlocks after 20 s of silence
   • AUTO/MANUAL  — MANUAL hands the HAT to the sliders / arrow keys /
                    click-on-radar; AUTO gives it back to SRP-PHAT + Kalman
   • CENTRE       — front pose (pan PAN_FRONT_DEG / tilt TILT_FRONT_DEG)
   • CAM          — start / stop the camera preview
-  Keys: M mute · A auto/manual · C centre · ←→↑↓ nudge (manual) · Q quit
+  Keys: M mute · P person-track · A auto/manual · C centre · ←→↑↓ nudge · Q quit
 
 Run from repo root:
   ./run_gui.sh [--real-servos]
@@ -78,6 +80,7 @@ class LiveDashboard:
     ) -> None:
         self.tracker = tracker or LecturerTracker(simulate_servos=simulate_servos)
         self.camera = None
+        self.face_tracker = None
         self._photo = None           # keep a ref or Tk drops the image
         self._cam_img_id = None
         self._syncing_sliders = False
@@ -181,13 +184,17 @@ class LiveDashboard:
                        OK if getattr(cfg, "VAD_ENABLED", True) else WARN)
         self.pill_hat = self._pill(pills, "HAT ?")
         self.pill_cam = self._pill(pills, "CAM OFF")
+        self.pill_lock = self._pill(pills, "AUDIO")
 
         ctrl = tk.Frame(hdr, bg=BG)
         ctrl.pack(side="right")
         self.btn_cam = self._button(ctrl, "CAM  ●", self._camera_toggle, color=PANEL_2)
         self.btn_center = self._button(ctrl, "⌂  CENTRE", self._center, color=PANEL_2)
         self.btn_servo = self._button(ctrl, "SERVO  AUTO", self._servo_toggle, color=ACCENT, fg=BG)
+        self.btn_person = self._button(ctrl, "PERSON  ON", self._person_toggle, color=VIOLET, fg=BG)
         self.btn_mic = self._button(ctrl, "MIC  ON", self._mic_toggle, color=OK, fg=BG)
+        if not bool(getattr(cfg, "PERSON_TRACK_ENABLED", True)):
+            self._style_person_btn(False)
 
     def _pill(self, parent, text) -> tk.Label:
         lbl = tk.Label(parent, text=text, bg=PANEL_2, fg=MUTED, font=(MONO, 10, "bold"), padx=10, pady=3)
@@ -317,6 +324,7 @@ class LiveDashboard:
         r = self.root
         r.bind("<KeyPress-m>", lambda e: self._mic_toggle())
         r.bind("<KeyPress-a>", lambda e: self._servo_toggle())
+        r.bind("<KeyPress-p>", lambda e: self._person_toggle())
         r.bind("<KeyPress-c>", lambda e: self._center())
         r.bind("<KeyPress-q>", lambda e: self._on_close())
         r.bind("<Left>", lambda e: self._nudge(-NUDGE_DEG, 0))
@@ -329,6 +337,19 @@ class LiveDashboard:
         self.tracker.set_mic_enabled(on)
         self.btn_mic.configure(
             text="MIC  ON" if on else "MIC  OFF", bg=OK if on else BAD, activebackground=OK if on else BAD
+        )
+
+    def _person_toggle(self) -> None:
+        on = not self.tracker.person_lock.enabled
+        self.tracker.set_person_track(on)
+        self._style_person_btn(on)
+
+    def _style_person_btn(self, on: bool) -> None:
+        self.btn_person.configure(
+            text="PERSON  ON" if on else "PERSON  OFF",
+            bg=VIOLET if on else PANEL_2,
+            fg=BG if on else TEXT,
+            activebackground=VIOLET if on else PANEL_2,
         )
 
     def _servo_toggle(self) -> None:
@@ -387,18 +408,42 @@ class LiveDashboard:
                 cam = CameraFeed()
                 if cam.start():
                     self.camera = cam
+                    self._start_face_tracker()
                 else:
                     self.cam_info.configure(text=f"no camera: {cam.error}", fg=BAD)
             except Exception as exc:  # pragma: no cover
                 log.warning("camera init failed: %s", exc)
                 self.cam_info.configure(text=f"camera error: {exc}", fg=BAD)
         elif not start and self.camera is not None:
+            self._stop_face_tracker()
             self.camera.stop()
             self.camera = None
             self._photo = None
         on = self.camera is not None
         self.btn_cam.configure(bg=VIOLET if on else PANEL_2, fg=BG if on else TEXT,
                                activebackground=VIOLET if on else PANEL_2)
+
+    def _start_face_tracker(self) -> None:
+        self._stop_face_tracker()
+        if self.camera is None:
+            return
+        try:
+            from vision.face_tracker import FaceTracker
+
+            ft = FaceTracker(self.camera)
+            if ft.start():
+                self.face_tracker = ft
+                self.tracker.attach_vision(ft)
+            else:
+                log.warning("FaceTracker not started: %s", ft.error)
+        except Exception as exc:
+            log.warning("FaceTracker init failed: %s", exc)
+
+    def _stop_face_tracker(self) -> None:
+        self.tracker.attach_vision(None)
+        if self.face_tracker is not None:
+            self.face_tracker.stop()
+            self.face_tracker = None
 
     # ══════════════════════════════════════════════════════════════════════
     # drawing
@@ -410,6 +455,7 @@ class LiveDashboard:
         c.delete("hud")
         frame = self.camera.latest() if self.camera is not None else None
 
+        ox = oy = tw = th = fw = fh = 0
         if frame is None:
             c.delete("img")
             self._photo = None
@@ -422,6 +468,7 @@ class LiveDashboard:
             fh, fw = frame.shape[:2]
             scale = min(w / fw, h / fh)
             tw, th = max(1, int(fw * scale)), max(1, int(fh * scale))
+            ox, oy = (w - tw) / 2, (h - th) / 2
             self._photo = self._to_photo(frame, tw, th)
             if self._cam_img_id is None or not c.find_withtag("img"):
                 self._cam_img_id = c.create_image(w / 2, h / 2, image=self._photo, tags="img")
@@ -429,8 +476,11 @@ class LiveDashboard:
                 c.itemconfigure(self._cam_img_id, image=self._photo)
                 c.coords(self._cam_img_id, w / 2, h / 2)
             self._set_pill(self.pill_cam, f"CAM {self.camera.backend.upper()}", VIOLET)
+            face_fps = ""
+            if self.face_tracker is not None and self.face_tracker.available:
+                face_fps = f"  face {self.face_tracker.fps_measured:3.0f} Hz"
             self.cam_info.configure(
-                text=f"{fw}×{fh}  {self.camera.measured_fps:4.1f} fps", fg=MUTED
+                text=f"{fw}×{fh}  {self.camera.measured_fps:4.1f} fps{face_fps}", fg=MUTED
             )
 
         # HUD — crosshair, bearing ticker, speech ring
@@ -445,11 +495,25 @@ class LiveDashboard:
             c.create_line(x0, y0, x1, y1, fill=LINE, width=2, tags="hud")
 
         speech = bool(s.get("speech"))
-        if speech:
+        lock_mode = str(s.get("lock_mode") or "AUDIO")
+        if speech or lock_mode == "LOCKED":
             self._blink = (self._blink + 1) % 12
             r = 7 if self._blink < 6 else 5
+            tag = "LOCK" if lock_mode == "LOCKED" else "TRACK"
             c.create_oval(w - 34 - r, 22 - r, w - 34 + r, 22 + r, fill=BAD, outline="", tags="hud")
-            c.create_text(w - 48, 22, text="TRACK", fill=BAD, anchor="e", font=(MONO, 10, "bold"), tags="hud")
+            c.create_text(w - 48, 22, text=tag, fill=BAD, anchor="e", font=(MONO, 10, "bold"), tags="hud")
+
+        box = s.get("face_box")
+        if box and tw > 0 and fw > 0:
+            bx, by, bw, bh = box
+            sx, sy = tw / fw, th / fh
+            x0, y0 = ox + bx * sx, oy + by * sy
+            x1, y1 = x0 + bw * sx, y0 + bh * sy
+            col = OK if lock_mode == "LOCKED" else ACCENT
+            c.create_rectangle(x0, y0, x1, y1, outline=col, width=2, tags="hud")
+            src = str(s.get("lock_source") or "")
+            c.create_text(x0 + 4, max(14, y0 - 10), text=src or "face",
+                          fill=col, anchor="w", font=(MONO, 9, "bold"), tags="hud")
 
         # where the sound is relative to the camera's current pan (HFOV≈66° for CM3 wide-ish)
         az = float(s.get("azimuth_deg") or 0.0)
@@ -461,19 +525,24 @@ class LiveDashboard:
             px = max(14, min(w - 14, px))
             c.create_polygon(px, h - 28, px - 9, h - 12, px + 9, h - 12, fill=OK, outline="", tags="hud")
         mode = "MANUAL" if s.get("servo_manual") else "AUTO"
-        hud = f"pan {pan:5.1f}°  tilt {float(s.get('tilt_deg') or 0):5.1f}°  ·  {mode}"
+        lock_bit = ""
+        if s.get("person_track"):
+            lock_bit = f"  ·  {lock_mode}"
+            if lock_mode == "LOCKED":
+                lock_bit += f" {s.get('lock_source') or ''}"
+            else:
+                lock_bit += f" {float(s.get('lock_progress') or 0)*100:3.0f}%"
+        hud = f"pan {pan:5.1f}°  tilt {float(s.get('tilt_deg') or 0):5.1f}°  ·  {mode}{lock_bit}"
         c.create_rectangle(12, h - 30, 12 + 8 * len(hud) + 10, h - 10, fill=BG, outline="", tags="hud")
         c.create_text(17, h - 20, text=hud, fill=TEXT, anchor="w", font=(MONO, 10), tags="hud")
         if not s.get("mic_enabled", True):
             c.create_text(cx, 24, text="MIC MUTED", fill=BAD, font=(FONT, 12, "bold"), tags="hud")
 
     @staticmethod
+    @staticmethod
     def _pan_to_az(pan: float) -> float:
-        """Inverse of ServoController.map_angles pan branch (for HUD only)."""
-        f = float(cfg.PAN_FRONT_DEG)
-        if pan >= f:
-            return (pan - f) / max(1e-6, cfg.PAN_MAX_DEG - f) * cfg.AZIMUTH_MAX_DEG
-        return (pan - f) / max(1e-6, f - cfg.PAN_MIN_DEG) * abs(cfg.AZIMUTH_MIN_DEG)
+        from pipeline.person_lock import pan_to_azimuth
+        return pan_to_azimuth(pan)
 
     def _to_photo(self, frame: np.ndarray, tw: int, th: int):
         if _HAVE_PIL:
@@ -707,6 +776,15 @@ class LiveDashboard:
         else:
             self._set_pill(self.pill_speech, active_txt if speech else "IDLE", OK, on=speech)
         self._set_pill(self.pill_hat, "HAT SIM" if sim else "HAT LIVE", WARN if sim else OK)
+        lock_mode = str(s.get("lock_mode") or "AUDIO")
+        if not s.get("person_track"):
+            self._set_pill(self.pill_lock, "TRACK OFF", PANEL_2, on=False)
+        elif lock_mode == "LOCKED":
+            src = str(s.get("lock_source") or "fused").upper()
+            self._set_pill(self.pill_lock, f"LOCK {src}", OK)
+        else:
+            pct = int(float(s.get("lock_progress") or 0) * 100)
+            self._set_pill(self.pill_lock, f"AUDIO {pct}%", ACCENT, on=pct > 0)
 
         # gate status (Silero speech, or plain level when VAD is off)
         self.vad_label.configure(text="MUTED" if muted else (active_txt if speech else idle_txt),
@@ -756,8 +834,10 @@ class LiveDashboard:
         return widget in (self.pan_slider, self.tilt_slider)
 
     def _on_close(self) -> None:
+        self._stop_face_tracker()
         if self.camera is not None:
             self.camera.stop()
+            self.camera = None
         self.tracker.stop()
         self.root.destroy()
 

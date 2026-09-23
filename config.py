@@ -145,5 +145,31 @@ CAMERA_PREVIEW_HEIGHT = 360
 CAMERA_FPS = 20               # preview frame rate
 CAMERA_HFLIP = True           # camera is mounted upside-down on the pan-tilt head:
 CAMERA_VFLIP = True           # hflip + vflip = 180° rotation (keeps left/right true)
+CAMERA_SWAP_RB = True         # picamera2 RGB888 is BGR in memory on this Pi
+CAMERA_INVERT_COLORS = True   # photographic-negative feed → un-invert to natural colour
+CAMERA_HFOV_DEG = 102.0       # Camera Module 3 *Wide* (imx708_wide) horizontal FOV; standard CM3 = 66
+
+# ── Person lock (audio-visual fusion, vision/face_tracker.py + pipeline/person_lock.py) ──
+# AUDIO mode: SRP-PHAT alone steers the HAT (as before).
+# LOCKED mode: entered when one talker has spoken from a stable bearing for
+# LOCK_AFTER_SPEECH_S. The camera (YuNet face detector) then keeps that person
+# centred, fused with audio when audio is active. Left after UNLOCK_SILENCE_S of
+# no speech, or when sustained speech comes from elsewhere (speaker change).
+PERSON_TRACK_ENABLED = True   # GUI toggle "PERSON TRACK"; False = pure audio tracking
+FACE_MODEL_PATH = Path(__file__).resolve().parent / "models" / "face_detection_yunet_2023mar.onnx"
+VISION_FPS = 8                # detector rate (Pi 5 CPU: YuNet @320 px ≈ 15–25 ms)
+VISION_DETECT_WIDTH = 320     # frames are downscaled to this width before detection
+VISION_SCORE_MIN = 0.6        # YuNet confidence threshold
+VISION_EMA_ALPHA = 0.35       # smoothing of the tracked face centre (per detection)
+VISION_STALE_S = 1.0          # face older than this is treated as "not visible"
+VISION_AZ_SIGN = 1            # +1: person on the image's right → positive azimuth (high pan)
+LOCK_AFTER_SPEECH_S = 6.0     # continuous speech from one bearing before locking
+LOCK_BEARING_TOL_DEG = 20.0   # bearing wander allowed while accumulating lock time
+LOCK_FACE_MAX_OFF_DEG = 30.0  # face must be within this of image centre to be adopted as the target
+UNLOCK_SILENCE_S = 20.0       # no speech for this long → back to AUDIO mode (servo holds)
+SPEAKER_CHANGE_S = 4.0        # sustained speech > FUSION_MAX_DISAGREE_DEG away → unlock (new talker)
+FUSION_AUDIO_WEIGHT = 0.3     # weight of audio bearing when both cues agree (visual gets the rest)
+FUSION_MAX_DISAGREE_DEG = 25.0  # beyond this the cues are not averaged; visual wins (audio = reflection / other)
+FUSION_EMA_ALPHA = 0.25       # smoothing of the fused bearing before the servo
 
 GUI_REFRESH_MS = 50

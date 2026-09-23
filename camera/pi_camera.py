@@ -190,8 +190,11 @@ class CameraFeed:
                     frame = self._picam.capture_array("main")
                     if frame.ndim == 3 and frame.shape[2] == 4:
                         frame = frame[:, :, :3]
+                    frame = self._colour_fix(frame)
                 elif self._proc is not None:
                     frame = self._read_mjpeg_frame()
+                    if frame is not None:
+                        frame = self._colour_fix(frame, swap_rb=False)
                 elif self._cv is not None:
                     ok, bgr = self._cv.read()
                     if ok:
@@ -200,6 +203,7 @@ class CameraFeed:
                             frame = frame[:, ::-1]
                         if self.vflip:
                             frame = frame[::-1]
+                        frame = self._colour_fix(frame, swap_rb=False)
             except Exception as exc:  # pragma: no cover
                 self.error = str(exc)
                 log.warning("Camera read failed: %s", exc)
@@ -219,6 +223,17 @@ class CameraFeed:
                 dt = time.monotonic() - t0
                 if dt < period:
                     time.sleep(period - dt)
+
+    @staticmethod
+    def _colour_fix(frame: np.ndarray, swap_rb: bool = True) -> np.ndarray:
+        """Undo picamera2 BGR-in-RGB888 and/or a photographic-negative look."""
+        if frame is None or frame.ndim != 3:
+            return frame
+        if swap_rb and bool(getattr(cfg, "CAMERA_SWAP_RB", True)):
+            frame = frame[:, :, ::-1]
+        if bool(getattr(cfg, "CAMERA_INVERT_COLORS", False)):
+            frame = 255 - frame
+        return frame
 
     def _read_mjpeg_frame(self) -> Optional[np.ndarray]:
         """Pull one JPEG (FFD8 … FFD9) off the rpicam-vid pipe."""

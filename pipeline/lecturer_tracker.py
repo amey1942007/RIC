@@ -21,6 +21,7 @@ import config as cfg
 from audio.srp_phat import SRPPhatLocalizer
 from audio.kalman import KalmanFilter2D
 from control.servo_controller import ServoController
+from pipeline.person_lock import MODE_LOCKED, PersonLock
 
 log = logging.getLogger(__name__)
 
@@ -139,6 +140,12 @@ class LecturerTracker:
         self._servo_manual = False   # True → pipeline never commands the HAT
         self._servo_lock = threading.Lock()
 
+        # Person lock (audio + face fusion). Face tracker is attached by the GUI
+        # once the camera is open — until then lock still works on audio alone.
+        self.person_lock = PersonLock()
+        self.face_tracker = None
+        self._prev_lock_mode = "AUDIO"
+
         # VAD-gating diagnostics (config.VAD_DIAGNOSTIC_LOGGING)
         self._diag = bool(getattr(cfg, "VAD_DIAGNOSTIC_LOGGING", False))
         self._tracking_start_t: Optional[float] = None
@@ -166,6 +173,13 @@ class LecturerTracker:
             "mic_peak": [0.0] * cfg.NUM_MICS,
             "mic_enabled": True,
             "servo_manual": False,
+            "person_track": True,
+            "lock_mode": "AUDIO",
+            "lock_progress": 0.0,
+            "lock_source": "none",
+            "lock_silence_s": 0.0,
+            "face_visible": False,
+            "face_box": None,
             "t": time.time(),
         }
 
@@ -180,6 +194,7 @@ class LecturerTracker:
         s["audio_drops"] = int(self._audio_drops)
         s["audio_queue"] = int(self._audio_q.qsize())
         s["noise_floor"] = float(self._noise_floor)
+        s["person_track"] = bool(self.person_lock.enabled)
         return s
 
     # ── GUI controls ───────────────────────────────────────────────────────
@@ -232,6 +247,17 @@ class LecturerTracker:
         self._reset_tracking_state()
         return self.servos.pan_deg, self.servos.tilt_deg
 
+    def attach_vision(self, face_tracker) -> None:
+        """GUI hands over the running FaceTracker (or None when camera stops)."""
+        self.face_tracker = face_tracker
+        if face_tracker is not None and hasattr(face_tracker, "reacquire"):
+            face_tracker.reacquire()
+
+    def set_person_track(self, enabled: bool) -> None:
+        self.person_lock.set_enabled(enabled)
+        if enabled and self.face_tracker is not None:
+            self.face_tracker.reacquire()
+
     def _reset_tracking_state(self) -> None:
         self._speech_on = 0
         self._speech_off = 0
@@ -243,6 +269,9 @@ class LecturerTracker:
         self._locked_az = None
         self._locked_el = None
         self.kalman.reset(0.0, 0.0)
+        self.person_lock.reset("tracking-reset")
+        if self.face_tracker is not None:
+            self.face_tracker.reacquire()
 
     @property
     def last_result(self) -> dict[str, Any]:
@@ -567,8 +596,31 @@ class LecturerTracker:
         if locked:
             az, el = float(self._locked_az), float(self._locked_el)
 
-        # Only command HAT when still in speech hangover AND peak is strong
-        servo_conf = conf if (speech and conf >= move_thr and measurement) else 0.0
+        face = None
+        if self.face_tracker is not None:
+            face = self.face_tracker.visible()
+        lock = self.person_lock.update(
+            speech=speech,
+            audio_az=az if locked else None,
+            audio_el=el if locked else None,
+            audio_conf=conf,
+            face=face,
+            pan_deg=float(self.servos.pan_deg),
+        )
+        if lock.mode == MODE_LOCKED and self._prev_lock_mode != MODE_LOCKED:
+            if self.face_tracker is not None:
+                self.face_tracker.reacquire()
+        self._prev_lock_mode = lock.mode
+        if lock.mode == MODE_LOCKED and lock.fused_az is not None:
+            az, el = float(lock.fused_az), float(lock.fused_el if lock.fused_el is not None else el)
+            locked = True
+
+        # AUDIO: only move on a strong speech peak. LOCKED: keep steering from
+        # the fused bearing so a pause < 20 s does not freeze the HAT.
+        if lock.mode == MODE_LOCKED and lock.fused_az is not None:
+            servo_conf = max(float(lock.fused_conf), move_thr)
+        else:
+            servo_conf = conf if (speech and conf >= move_thr and measurement) else 0.0
         if self._servo_manual:
             pan, tilt = self.servos.pan_deg, self.servos.tilt_deg
         else:
@@ -581,7 +633,7 @@ class LecturerTracker:
             "vad_gain": float(classification.get("gain", 1.0)),
             "vad_peak": float(classification.get("peak", 0.0)),
             "speech": speech,
-            "bearing_locked": locked if speech else False,
+            "bearing_locked": locked if (speech or lock.mode == MODE_LOCKED) else False,
             "azimuth_deg": az,
             "elevation_deg": el,
             "confidence": conf,
@@ -593,6 +645,13 @@ class LecturerTracker:
             "mic_peak": mic_peak.tolist(),
             "mic_enabled": True,
             "servo_manual": self._servo_manual,
+            "person_track": lock.enabled,
+            "lock_mode": lock.mode,
+            "lock_progress": lock.lock_progress,
+            "lock_source": lock.source,
+            "lock_silence_s": lock.silence_s,
+            "face_visible": lock.face_visible,
+            "face_box": lock.face_box,
             "t": time.time(),
         }
         with self._lock:
