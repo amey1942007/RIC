@@ -72,7 +72,9 @@ class LecturerTracker:
 
         # Speech gate: Silero VAD, or a plain level gate when config.VAD_ENABLED is False
         self._vad_enabled = bool(getattr(cfg, "VAD_ENABLED", True))
-        self._energy_gate = float(getattr(cfg, "ENERGY_GATE_PEAK", 0.006))
+        self._energy_gate = float(getattr(cfg, "ENERGY_GATE_PEAK", 0.004))
+        self._energy_ratio = float(getattr(cfg, "ENERGY_GATE_RATIO", 3.0))
+        self._noise_floor = self._energy_gate / max(1.0, self._energy_ratio)
         self.vad = None
         if self._vad_enabled:
             self.vad = SileroVAD(
@@ -385,19 +387,23 @@ class LecturerTracker:
     def _level_gate(self, mono_chunk: np.ndarray) -> dict[str, Any]:
         """
         Silero-free gate (config.VAD_ENABLED = False): active when the chunk's
-        peak level (after high-pass) reaches ENERGY_GATE_PEAK. Returns the same
-        dict shape as SileroVAD.classify so the rest of the pipeline is unchanged.
-        "probability" is peak / threshold clipped to 1 so the GUI meter still moves.
+        peak level (after high-pass) exceeds max(ENERGY_GATE_PEAK, ratio × noise
+        floor). The floor is a slow EMA of quiet-chunk peaks (fast to fall, slow to
+        rise) so a talker cannot drag it up. Returns the same dict shape as
+        SileroVAD.classify; "probability" is peak / threshold clipped to 1.
         """
         peak = float(np.max(np.abs(mono_chunk))) if mono_chunk.size else 0.0
-        thr = self._energy_gate
+        thr = max(self._energy_gate, self._energy_ratio * self._noise_floor)
         active = peak >= thr
+        if not active:
+            a = 0.02 if peak > self._noise_floor else 0.2
+            self._noise_floor += a * (peak - self._noise_floor)
         return {
             "label": "SOUND" if active else "QUIET",
             "human_speech": active,
             "probability": float(min(1.0, peak / thr)) if thr > 0 else 1.0,
             "threshold": 1.0,
-            "gain": 1.0,
+            "gain": thr,            # shown by GUI as the live gate level
             "peak": peak,
         }
 

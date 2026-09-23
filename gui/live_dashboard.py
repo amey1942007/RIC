@@ -704,7 +704,7 @@ class LiveDashboard:
             gate = (f"Silero thr {cfg.VAD_THRESHOLD:.2f}   "
                     f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}")
         else:
-            gate = f"LEVEL GATE peak≥{getattr(cfg, 'ENERGY_GATE_PEAK', 0.006):.4f} (VAD off)"
+            gate = f"LEVEL GATE ≥{float(s.get('vad_gain') or 0):.4f} (VAD off)"
         self.vad_meta.configure(
             text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   {gate}   "
                  f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}"

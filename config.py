@@ -12,10 +12,12 @@ from pathlib import Path
 SAMPLE_RATE = 16_000          # Silero VAD requires 16 kHz
 VAD_CHUNK_SAMPLES = 512       # Silero window @ 16 kHz
 # Speech gate. VAD_ENABLED=False bypasses Silero entirely and gates on plain signal
-# level instead: a chunk is "active" when its peak (after high-pass) >= ENERGY_GATE_PEAK.
+# level instead: a chunk is "active" when its peak (after high-pass) exceeds
+# max(ENERGY_GATE_PEAK, ENERGY_GATE_RATIO × tracked noise floor).
 # Measured on the Pi: quiet room 0.001–0.003, talker at ~1 m ≈ 0.02.
 VAD_ENABLED = False
-ENERGY_GATE_PEAK = 0.006
+ENERGY_GATE_PEAK = 0.004      # absolute minimum peak to count as sound
+ENERGY_GATE_RATIO = 3.0       # ... and at least this × the running noise floor
 # Slightly stricter gate + hangover reduces clap/noise yanking the HAT
 VAD_THRESHOLD = 0.58
 # Measured on the Pi (Sep 23): raw INMP441 speech peaks ≈0.02 → Silero never fires
