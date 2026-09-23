@@ -65,10 +65,11 @@ RIC/
 | 3V3 / GND | 1/17 + GND | — |
 
 Captured channel → mic is set by `MIC_CHANNEL_ORDER` in `config.py` (currently
-`(1, 0, 2, 3)`, calibrated with a talker on the array's left). If you rewire,
-re-run `scripts/check_rpi_4ch_mics.py --side left` from ~1 m on the left — it
-prints the order to set (the mirrored order is equally consistent but swaps
-left/right, so a level check alone cannot resolve it).
+`(0, 1, 2, 3)`: SD1 = top pair, SD2 = bottom pair with L/R reversed). It was
+determined by measuring GCC-PHAT lags between all six channel pairs with a
+talker on the right: the two earliest-arriving channels are the right-hand
+mics. If you rewire, repeat that measurement — a wrong order makes SRP-PHAT pin
+at ±90° with high confidence (now rejected by `SRP_REJECT_EDGE`).
 All channels are high-passed at `AUDIO_HIGHPASS_HZ` (120 Hz) and GCC-PHAT uses
 only `SRP_BAND_HZ` (300–4000 Hz); the raw Pi feed is >98 % sub-150 Hz rumble.
 

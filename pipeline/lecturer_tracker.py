@@ -483,6 +483,13 @@ class LecturerTracker:
             multi = np.stack(list(self._ring), axis=0)  # (N, 4)
             loc = self.localizer.localize(multi)
             conf = float(loc["confidence"])
+            # A peak sitting exactly on the azimuth grid edge means the delay pattern
+            # doesn't fit the array geometry (wrong channel order / non-acoustic noise).
+            if getattr(cfg, "SRP_REJECT_EDGE", True):
+                edge = float(cfg.AZIMUTH_MAX_DEG) - float(cfg.AZIMUTH_STEP_DEG)
+                if abs(float(loc["azimuth_deg"])) >= edge:
+                    loc = {**loc, "rejected_edge": True}
+                    conf = 0.0
             if conf >= cfg.CONFIDENCE_THRESHOLD:
                 az_m = float(loc["azimuth_deg"])
                 el_m = float(loc["elevation_deg"])

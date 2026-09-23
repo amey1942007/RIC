@@ -32,11 +32,13 @@ NUM_MICS = 4
 CHANNELS = 4
 AUDIO_DEVICE_NAME = "ricinmp4414ch"
 # Captured I2S channel index for each logical mic M0..M3 (positions below stay fixed).
-# I2S slots: SD1 → ch0 (L) / ch1 (R), SD2 → ch2 (L) / ch3 (R). Top pair is wired
-# R = top-left (M0) / L = top-right (M1); bottom pair L = bottom-right (M2) / R = bottom-left (M3).
-# Set by `scripts/check_rpi_4ch_mics.py --side left` (talker on the left → negative azimuth).
-# Its mirror (0, 1, 3, 2) is equally SRP-consistent but swaps left/right.
-MIC_CHANNEL_ORDER = (1, 0, 2, 3)
+# I2S slots: SD1 → ch0 (L) / ch1 (R), SD2 → ch2 (L) / ch3 (R).
+# Measured Sep 23 (talker on the right, GCC-PHAT lags, 56 frames, all 6 pairs consistent):
+# ch1 & ch2 arrive first (right side), ch0 & ch3 last (left side) → ch0=TL ch1=TR ch2=BR ch3=BL.
+# i.e. SD1 is the top pair (L=left), SD2 the bottom pair with L/R reversed (L=right mic).
+# Earlier orders (0,1,3,2)/(1,0,2,3) put an early and a late mic on the same side → SRP
+# pinned at ±90°. Re-measure with the lag test if the array is rewired.
+MIC_CHANNEL_ORDER = (0, 1, 2, 3)
 # Measured: >98 % of raw energy is < 150 Hz (rumble / servo vibration) — no direction
 # info at those wavelengths for a 6 cm array and it swamps the VAD. High-pass everything.
 AUDIO_HIGHPASS_HZ = 120.0     # 4th-order Butterworth, applied to all 4 channels; 0 = off
@@ -73,6 +75,7 @@ CONFIDENCE_THRESHOLD = 0.58   # ignore weak / noisy peaks
 CONFIDENCE_MOVE_THRESHOLD = 0.65  # only move HAT above this
 SRP_MEDIAN_WINDOW = 5         # median of last N peaks before Kalman
 SRP_MAX_JUMP_DEG = 25.0       # reject single-frame outliers vs last good
+SRP_REJECT_EDGE = True        # discard peaks pinned at the grid edge (±AZIMUTH_MAX) — geometry mismatch artefact
 BEARING_HOLD_DEG = 4.0        # ignore SRP updates smaller than this (stops spin on a static talker)
 SRP_ADAPTIVE_SEARCH = True    # coarse-to-fine search (False = legacy full dense grid)
 SRP_COARSE_STEP_MULTIPLIER = 3  # pass-1 step = this × AZIMUTH/ELEVATION_STEP_DEG
@@ -104,11 +107,10 @@ PAN_CHANNEL = 1               # S1
 PAN_MIN_DEG = 0.0
 PAN_MAX_DEG = 150.0
 PAN_FRONT_DEG = 90.0          # az = 0 → this pan angle
-# Which way the HAT turns for a positive azimuth. +1: az>0 → toward PAN_MAX (150);
-# -1: az>0 → toward PAN_MIN (0). Set -1 on Sep 23: with the calibrated mic order the
-# camera turned AWAY from a talker on the right, i.e. the pan servo runs opposite to
-# the azimuth sign convention (mic order was verified separately with --side left).
-PAN_DIRECTION = -1
+# Which way the HAT turns for a positive azimuth (talker on the array's right, +x).
+# +1: az>0 → toward PAN_MAX (150);  -1: az>0 → toward PAN_MIN (0).
+# Flip this if the camera turns away from the talker.
+PAN_DIRECTION = 1
 # Tilt: 80 = highest (look up), 145 = eye-level front, 180 = lowest (look down)
 TILT_MIN_DEG = 80.0           # top / up
 TILT_MAX_DEG = 180.0          # bottom / down
