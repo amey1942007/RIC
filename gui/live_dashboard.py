@@ -143,7 +143,9 @@ class LiveDashboard:
         right.rowconfigure(0, weight=0)
         right.rowconfigure(1, weight=3)
         right.rowconfigure(2, weight=4)
-        self._build_vad(self._card(right, "VOICE · Silero VAD", row=0, col=0))
+        vad_title = ("VOICE · Silero VAD" if getattr(cfg, "VAD_ENABLED", True)
+                     else "SOUND GATE · VAD OFF (level only)")
+        self._build_vad(self._card(right, vad_title, row=0, col=0))
         self._build_radar(self._card(right, "SOUND RADAR · SRP-PHAT", row=1, col=0, pady=(7, 0)))
         self._build_servos(self._card(right, "PAN / TILT HAT · Waveshare", row=2, col=0, pady=(7, 0)))
 
@@ -174,6 +176,9 @@ class LiveDashboard:
         pills.pack(side="left", padx=24)
         self.pill_live = self._pill(pills, "STARTING")
         self.pill_speech = self._pill(pills, "IDLE")
+        self.pill_vad = self._pill(pills, "VAD ON" if getattr(cfg, "VAD_ENABLED", True) else "VAD OFF")
+        self._set_pill(self.pill_vad, self.pill_vad.cget("text"),
+                       OK if getattr(cfg, "VAD_ENABLED", True) else WARN)
         self.pill_hat = self._pill(pills, "HAT ?")
         self.pill_cam = self._pill(pills, "CAM OFF")
 
@@ -222,7 +227,8 @@ class LiveDashboard:
     def _build_vad(self, body: tk.Frame) -> None:
         row = tk.Frame(body, bg=PANEL)
         row.pack(fill="x")
-        self.vad_label = tk.Label(row, text="NON_SPEECH", bg=PANEL, fg=MUTED, font=(FONT, 18, "bold"))
+        self.vad_label = tk.Label(row, text="NON_SPEECH" if getattr(cfg, "VAD_ENABLED", True) else "QUIET",
+                                  bg=PANEL, fg=MUTED, font=(FONT, 18, "bold"))
         self.vad_label.pack(side="left")
         self.vad_prob = tk.Label(row, text="0%", bg=PANEL, fg=ACCENT, font=(MONO, 22, "bold"))
         self.vad_prob.pack(side="right")
@@ -556,9 +562,13 @@ class LiveDashboard:
         fill = max(0.0, min(1.0, prob)) * w
         color = LINE if muted else (OK if speech else ACCENT)
         c.create_rectangle(0, 0, fill, h, fill=color, outline="")
-        tx = cfg.VAD_THRESHOLD * w
-        c.create_line(tx, 0, tx, h, fill=WARN, width=2)
-        c.create_text(tx + 4, h / 2, text=f"thr {cfg.VAD_THRESHOLD:.2f}", fill=WARN, anchor="w", font=(MONO, 8))
+        if getattr(cfg, "VAD_ENABLED", True):
+            tx = cfg.VAD_THRESHOLD * w
+            c.create_line(tx, 0, tx, h, fill=WARN, width=2)
+            c.create_text(tx + 4, h / 2, text=f"thr {cfg.VAD_THRESHOLD:.2f}", fill=WARN, anchor="w", font=(MONO, 8))
+        else:
+            # level mode: bar = peak / gate, so the gate is always at 100 %
+            c.create_text(w - 4, h / 2, text="gate →", fill=WARN, anchor="e", font=(MONO, 8))
 
     def _draw_radar(self, az: float, el: float, conf: float, locked: bool, pan: float) -> None:
         c = self.radar_canvas
@@ -690,21 +700,23 @@ class LiveDashboard:
         # header pills
         self._set_pill(self.pill_live, "LIVE" if self.tracker.running else "STOPPED",
                        OK if self.tracker.running else BAD)
+        vad_on = bool(getattr(cfg, "VAD_ENABLED", True))
+        active_txt, idle_txt = ("SPEECH", "NON_SPEECH") if vad_on else ("SOUND", "QUIET")
         if muted:
             self._set_pill(self.pill_speech, "MUTED", BAD)
         else:
-            self._set_pill(self.pill_speech, "SPEECH" if speech else "IDLE", OK, on=speech)
+            self._set_pill(self.pill_speech, active_txt if speech else "IDLE", OK, on=speech)
         self._set_pill(self.pill_hat, "HAT SIM" if sim else "HAT LIVE", WARN if sim else OK)
 
-        # vad
-        self.vad_label.configure(text="MUTED" if muted else ("SPEECH" if speech else "NON_SPEECH"),
+        # gate status (Silero speech, or plain level when VAD is off)
+        self.vad_label.configure(text="MUTED" if muted else (active_txt if speech else idle_txt),
                                  fg=BAD if muted else (OK if speech else MUTED))
         self.vad_prob.configure(text=f"{prob * 100:.0f}%")
-        if getattr(cfg, "VAD_ENABLED", True):
+        if vad_on:
             gate = (f"Silero thr {cfg.VAD_THRESHOLD:.2f}   "
                     f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}")
         else:
-            gate = f"LEVEL GATE ≥{float(s.get('vad_gain') or 0):.4f} (VAD off)"
+            gate = f"SILERO VAD OFF · level gate ≥{float(s.get('vad_gain') or 0):.4f}"
         self.vad_meta.configure(
             text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   {gate}   "
                  f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}"

@@ -17,7 +17,7 @@ from typing import Any, Optional
 import numpy as np
 
 import config as cfg
-from audio.silero_vad import SileroVAD
+# SileroVAD (and torch) is imported lazily inside __init__ only when config.VAD_ENABLED
 from audio.srp_phat import SRPPhatLocalizer
 from audio.kalman import KalmanFilter2D
 from control.servo_controller import ServoController
@@ -77,6 +77,8 @@ class LecturerTracker:
         self._noise_floor = self._energy_gate / max(1.0, self._energy_ratio)
         self.vad = None
         if self._vad_enabled:
+            from audio.silero_vad import SileroVAD  # pulls in torch — only when wanted
+
             self.vad = SileroVAD(
                 sample_rate=cfg.SAMPLE_RATE,
                 threshold=vad_threshold,
@@ -86,7 +88,9 @@ class LecturerTracker:
                 max_gain=cfg.VAD_MAX_GAIN,
             )
         else:
-            log.info("VAD disabled — level gate: peak >= %.4f", self._energy_gate)
+            log.info("Silero VAD OFF (config.VAD_ENABLED=False) — torch not loaded; "
+                     "level gate: peak >= max(%.4f, %.1fx noise floor)",
+                     self._energy_gate, self._energy_ratio)
         self.localizer = SRPPhatLocalizer(
             mic_positions=cfg.MIC_POSITIONS,
             sample_rate=cfg.SAMPLE_RATE,
