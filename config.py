@@ -11,6 +11,11 @@ from pathlib import Path
 # ── Audio ──────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 16_000          # Silero VAD requires 16 kHz
 VAD_CHUNK_SAMPLES = 512       # Silero window @ 16 kHz
+# Speech gate. VAD_ENABLED=False bypasses Silero entirely and gates on plain signal
+# level instead: a chunk is "active" when its peak (after high-pass) >= ENERGY_GATE_PEAK.
+# Measured on the Pi: quiet room 0.001–0.003, talker at ~1 m ≈ 0.02.
+VAD_ENABLED = False
+ENERGY_GATE_PEAK = 0.006
 # Slightly stricter gate + hangover reduces clap/noise yanking the HAT
 VAD_THRESHOLD = 0.58
 # Measured on the Pi (Sep 23): raw INMP441 speech peaks ≈0.02 → Silero never fires
@@ -97,6 +102,11 @@ PAN_CHANNEL = 1               # S1
 PAN_MIN_DEG = 0.0
 PAN_MAX_DEG = 150.0
 PAN_FRONT_DEG = 90.0          # az = 0 → this pan angle
+# Which way the HAT turns for a positive azimuth. +1: az>0 → toward PAN_MAX (150);
+# -1: az>0 → toward PAN_MIN (0). Set -1 on Sep 23: with the calibrated mic order the
+# camera turned AWAY from a talker on the right, i.e. the pan servo runs opposite to
+# the azimuth sign convention (mic order was verified separately with --side left).
+PAN_DIRECTION = -1
 # Tilt: 80 = highest (look up), 145 = eye-level front, 180 = lowest (look down)
 TILT_MIN_DEG = 80.0           # top / up
 TILT_MAX_DEG = 180.0          # bottom / down

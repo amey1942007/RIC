@@ -700,11 +700,14 @@ class LiveDashboard:
         self.vad_label.configure(text="MUTED" if muted else ("SPEECH" if speech else "NON_SPEECH"),
                                  fg=BAD if muted else (OK if speech else MUTED))
         self.vad_prob.configure(text=f"{prob * 100:.0f}%")
+        if getattr(cfg, "VAD_ENABLED", True):
+            gate = (f"Silero thr {cfg.VAD_THRESHOLD:.2f}   "
+                    f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}")
+        else:
+            gate = f"LEVEL GATE peak≥{getattr(cfg, 'ENERGY_GATE_PEAK', 0.006):.4f} (VAD off)"
         self.vad_meta.configure(
-            text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   "
-                 f"thr {cfg.VAD_THRESHOLD:.2f}   "
-                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}   "
-                 f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}"
+            text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   {gate}   "
+                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}"
         )
 
         # servo readouts + sliders (sync without triggering command)

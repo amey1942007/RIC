@@ -157,10 +157,13 @@ class ServoController:
         az = float(np_clip(azimuth_deg, cfg.AZIMUTH_MIN_DEG, cfg.AZIMUTH_MAX_DEG))
         el = float(np_clip(elevation_deg, cfg.ELEVATION_MIN_DEG, cfg.ELEVATION_MAX_DEG))
 
-        # Piecewise pan: az=0 → PAN_FRONT; az>0 (right) → PAN_MAX; az<0 → PAN_MIN
+        # Piecewise pan: az=0 → PAN_FRONT; az>0 → PAN_MAX; az<0 → PAN_MIN
+        # (PAN_DIRECTION = -1 swaps the two sides when the servo runs the other way)
         p_lo = float(cfg.PAN_MIN_DEG)
         p_hi = float(cfg.PAN_MAX_DEG)
         p_front = float(np_clip(getattr(cfg, "PAN_FRONT_DEG", 0.5 * (p_lo + p_hi)), p_lo, p_hi))
+        if int(getattr(cfg, "PAN_DIRECTION", 1)) < 0:
+            az = -az
         if az >= 0.0:
             span = max(1e-6, cfg.AZIMUTH_MAX_DEG)
             t = float(np_clip(az / span, 0.0, 1.0))

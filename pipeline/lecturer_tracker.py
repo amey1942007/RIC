@@ -70,14 +70,21 @@ class LecturerTracker:
         self._stop = threading.Event()
         self._lock = threading.Lock()
 
-        self.vad = SileroVAD(
-            sample_rate=cfg.SAMPLE_RATE,
-            threshold=vad_threshold,
-            normalize=cfg.VAD_NORMALIZE,
-            target_peak=cfg.VAD_TARGET_PEAK,
-            noise_floor=cfg.VAD_NOISE_FLOOR,
-            max_gain=cfg.VAD_MAX_GAIN,
-        )
+        # Speech gate: Silero VAD, or a plain level gate when config.VAD_ENABLED is False
+        self._vad_enabled = bool(getattr(cfg, "VAD_ENABLED", True))
+        self._energy_gate = float(getattr(cfg, "ENERGY_GATE_PEAK", 0.006))
+        self.vad = None
+        if self._vad_enabled:
+            self.vad = SileroVAD(
+                sample_rate=cfg.SAMPLE_RATE,
+                threshold=vad_threshold,
+                normalize=cfg.VAD_NORMALIZE,
+                target_peak=cfg.VAD_TARGET_PEAK,
+                noise_floor=cfg.VAD_NOISE_FLOOR,
+                max_gain=cfg.VAD_MAX_GAIN,
+            )
+        else:
+            log.info("VAD disabled — level gate: peak >= %.4f", self._energy_gate)
         self.localizer = SRPPhatLocalizer(
             mic_positions=cfg.MIC_POSITIONS,
             sample_rate=cfg.SAMPLE_RATE,
@@ -375,13 +382,35 @@ class LecturerTracker:
                 mono_carry = mono_carry[cfg.VAD_CHUNK_SAMPLES :]
                 self._process_chunk(chunk, mic_rms, mic_peak)
 
+    def _level_gate(self, mono_chunk: np.ndarray) -> dict[str, Any]:
+        """
+        Silero-free gate (config.VAD_ENABLED = False): active when the chunk's
+        peak level (after high-pass) reaches ENERGY_GATE_PEAK. Returns the same
+        dict shape as SileroVAD.classify so the rest of the pipeline is unchanged.
+        "probability" is peak / threshold clipped to 1 so the GUI meter still moves.
+        """
+        peak = float(np.max(np.abs(mono_chunk))) if mono_chunk.size else 0.0
+        thr = self._energy_gate
+        active = peak >= thr
+        return {
+            "label": "SOUND" if active else "QUIET",
+            "human_speech": active,
+            "probability": float(min(1.0, peak / thr)) if thr > 0 else 1.0,
+            "threshold": 1.0,
+            "gain": 1.0,
+            "peak": peak,
+        }
+
     def _process_chunk(
         self,
         mono_chunk: np.ndarray,
         mic_rms: np.ndarray,
         mic_peak: np.ndarray,
     ) -> None:
-        classification = self.vad.classify(mono_chunk)
+        if self.vad is not None:
+            classification = self.vad.classify(mono_chunk)
+        else:
+            classification = self._level_gate(mono_chunk)
         raw_speech = classification["human_speech"]
         prob = classification["probability"]
 
@@ -421,7 +450,8 @@ class LecturerTracker:
                     prob,
                 )
                 self._tracking_start_t = None
-            thr = float(classification.get("threshold", self.vad.threshold))
+            thr = float(classification.get(
+                "threshold", self.vad.threshold if self.vad is not None else 1.0))
             if abs(prob - thr) <= 0.1:
                 log.debug(
                     "VAD-DIAG borderline p=%.3f thr=%.2f gain=%.2f peak=%.3f raw=%s "
