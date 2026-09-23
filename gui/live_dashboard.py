@@ -517,7 +517,7 @@ class LiveDashboard:
         if muted:
             c.create_text(w / 2, (y0 + y1) / 2, text="MUTED", fill=BAD, font=(FONT, 16, "bold"))
 
-    def _draw_array(self, rms: list[float], az: float, el: float, speech: bool) -> None:
+    def _draw_array(self, rms: list[float], az: float, el: float, locked: bool) -> None:
         c = self.array_canvas
         c.delete("all")
         w = max(c.winfo_width(), 100)
@@ -539,7 +539,8 @@ class LiveDashboard:
             c.create_oval(x - rad - 4, y - rad - 4, x + rad + 4, y + rad + 4, outline=glow, width=1)
             c.create_oval(x - rad, y - rad, x + rad, y + rad, fill=glow, outline="")
             c.create_text(x, y, text=cfg.MIC_LABELS[i], fill=BG, font=(FONT, 9, "bold"))
-        if speech:
+        # Only draw when a bearing is locked — never animate from coasting Kalman noise
+        if locked:
             length = side * 0.45
             dx = math.sin(math.radians(az)) * length
             dy = -math.sin(math.radians(el)) * length
@@ -559,7 +560,7 @@ class LiveDashboard:
         c.create_line(tx, 0, tx, h, fill=WARN, width=2)
         c.create_text(tx + 4, h / 2, text=f"thr {cfg.VAD_THRESHOLD:.2f}", fill=WARN, anchor="w", font=(MONO, 8))
 
-    def _draw_radar(self, az: float, el: float, conf: float, speech: bool, pan: float) -> None:
+    def _draw_radar(self, az: float, el: float, conf: float, locked: bool, pan: float) -> None:
         c = self.radar_canvas
         c.delete("all")
         w = max(c.winfo_width(), 120)
@@ -588,12 +589,12 @@ class LiveDashboard:
         c.create_line(cx, cy, ax, ay, fill=VIOLET, width=2, dash=(6, 4))
         c.create_text(ax, ay - 10, text="cam", fill=VIOLET, font=(MONO, 8))
 
-        # source blip
-        if speech:
+        # source blip — only when a bearing is locked (not free-spinning noise)
+        if locked:
             d = radius * (0.35 + 0.6 * max(0.0, min(1.0, conf)))
             sx = cx + d * math.sin(math.radians(az))
             sy = cy - d * math.cos(math.radians(az))
-            glow = 10 + 14 * conf
+            glow = 10 + 14 * max(conf, 0.3)
             c.create_oval(sx - glow, sy - glow, sx + glow, sy + glow, outline=OK, width=1)
             c.create_oval(sx - 6, sy - 6, sx + 6, sy + 6, fill=OK, outline="")
             c.create_line(cx, cy, sx, sy, fill=OK, width=2)
@@ -608,12 +609,12 @@ class LiveDashboard:
         ey = gy1 - max(0.0, min(1.0, el_n)) * (gy1 - gy0)
         zero_y = gy1 - (0 - cfg.ELEVATION_MIN_DEG) / max(1e-6, cfg.ELEVATION_MAX_DEG - cfg.ELEVATION_MIN_DEG) * (gy1 - gy0)
         c.create_line(gx0 - 3, zero_y, gx0 + 15, zero_y, fill=MUTED)
-        c.create_polygon(gx0 + 12, ey, gx0 + 22, ey - 6, gx0 + 22, ey + 6, fill=OK if speech else MUTED, outline="")
+        c.create_polygon(gx0 + 12, ey, gx0 + 22, ey - 6, gx0 + 22, ey + 6, fill=OK if locked else MUTED, outline="")
         c.create_text(gx0 + 6, gy0 - 8, text="el", fill=MUTED, font=(MONO, 8))
 
         self.radar_info.configure(
-            text=f"az {az:+6.1f}°  el {el:+5.1f}°  conf {conf:.2f}",
-            fg=OK if conf >= cfg.CONFIDENCE_THRESHOLD else MUTED,
+            text=f"az {az:+6.1f}°  el {el:+5.1f}°  conf {conf:.2f}" + ("  LOCK" if locked else ""),
+            fg=OK if locked and conf >= cfg.CONFIDENCE_THRESHOLD else MUTED,
         )
 
     def _draw_servos(self, pan: float, tilt: float, manual: bool, sim: bool) -> None:
@@ -664,6 +665,8 @@ class LiveDashboard:
         c.create_text(gx - 60, (gy0 + gy1) / 2, text=f"TILT\n{tilt:.1f}°", fill=TEXT, font=(MONO, 11, "bold"), justify="center")
 
         c.create_text(w - 6, 8, text="SIM" if sim else "HAT LIVE", fill=WARN if sim else OK, anchor="ne", font=(MONO, 9, "bold"))
+        if not bool(getattr(cfg, "TRACK_TILT", True)):
+            c.create_text(gx, gy1 + 1, text="TILT LOCKED (pan-only)", fill=WARN, anchor="n", font=(MONO, 8, "bold"))
 
     # ══════════════════════════════════════════════════════════════════════
     # update loop
@@ -682,6 +685,7 @@ class LiveDashboard:
         sim = bool(s.get("servo_simulate", True))
         muted = not bool(s.get("mic_enabled", True))
         manual = bool(s.get("servo_manual", False))
+        locked = bool(s.get("bearing_locked", False)) and not muted
 
         # header pills
         self._set_pill(self.pill_live, "LIVE" if self.tracker.running else "STOPPED",
@@ -697,8 +701,10 @@ class LiveDashboard:
                                  fg=BAD if muted else (OK if speech else MUTED))
         self.vad_prob.configure(text=f"{prob * 100:.0f}%")
         self.vad_meta.configure(
-            text=f"peak {float(s.get('vad_peak') or 0):.3f}   agc gain {float(s.get('vad_gain') or 1):.1f}×   "
-                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS} chunks"
+            text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   "
+                 f"thr {cfg.VAD_THRESHOLD:.2f}   "
+                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}   "
+                 f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}"
         )
 
         # servo readouts + sliders (sync without triggering command)
@@ -714,9 +720,9 @@ class LiveDashboard:
 
         self._draw_camera(s)
         self._draw_mic_meters(rms, peak, muted)
-        self._draw_array(rms, az, el, speech)
+        self._draw_array(rms, az, el, locked)
         self._draw_vad(prob, speech, muted)
-        self._draw_radar(az, el, conf, speech, pan)
+        self._draw_radar(az, el, conf, locked, pan)
         self._draw_servos(pan, tilt, manual, sim)
 
         self.root.after(cfg.GUI_REFRESH_MS, self._tick)

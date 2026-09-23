@@ -167,7 +167,13 @@ class SRPPhatLocalizer:
 
     # ── PHAT GCC ───────────────────────────────────────────────────────────
     def _gcc_phat(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """Return circular GCC-PHAT correlation (length n_fft)."""
+        """
+        Return circular GCC-PHAT correlation (length n_fft).
+
+        Bins outside ``config.SRP_BAND_HZ`` are zeroed: below ~300 Hz a 6 cm
+        aperture has essentially no phase resolution and the Pi capture is
+        rumble-dominated there; above ~4 kHz spatial aliasing (d > λ/2) starts.
+        """
         n = self.n_fft
         X = rfft(x, n=n)
         Y = rfft(y, n=n)
@@ -175,8 +181,26 @@ class SRPPhatLocalizer:
         denom = np.abs(R)
         denom[denom < 1e-12] = 1e-12
         R /= denom  # PHAT weighting
+        R *= self._band_mask()
         cc = irfft(R, n=n)
         return cc
+
+    def _band_mask(self) -> np.ndarray:
+        mask = getattr(self, "_band_mask_cache", None)
+        if mask is None:
+            import config as cfg
+
+            freqs = np.fft.rfftfreq(self.n_fft, d=1.0 / self.sample_rate)
+            band = getattr(cfg, "SRP_BAND_HZ", None)
+            if band:
+                lo, hi = float(band[0]), float(band[1])
+                mask = ((freqs >= lo) & (freqs <= hi)).astype(np.float64)
+                if mask.sum() < 8:  # degenerate band → fall back to all bins
+                    mask = np.ones_like(freqs)
+            else:
+                mask = np.ones_like(freqs)
+            self._band_mask_cache = mask
+        return mask
 
     def _interp_peak(self, cc: np.ndarray, delay_samples: float) -> float:
         """

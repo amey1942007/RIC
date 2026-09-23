@@ -87,9 +87,16 @@ class KalmanFilter2D:
         measurement: Optional[Tuple[float, float]] = None,
         confidence: Optional[float] = None,
     ) -> Tuple[float, float]:
+        if measurement is None:
+            # No accepted peak this frame: freeze pose and kill coasting velocity
+            # so a static / intermittent source cannot spin the DOA arrow.
+            self.x[2] = 0.0
+            self.x[3] = 0.0
+            self.x[0], self.x[1] = self._last_az, self._last_el
+            return self._last_az, self._last_el
+
         self.predict()
-        if measurement is not None:
-            self.update(measurement[0], measurement[1], confidence)
+        self.update(measurement[0], measurement[1], confidence)
 
         az, el = float(self.x[0]), float(self.x[1])
         # Hard slew limit so one spike cannot jump tens of degrees
@@ -101,6 +108,10 @@ class KalmanFilter2D:
             az = self._last_az + max_s * (1.0 if daz > 0 else -1.0)
         if abs(del_) > max_s:
             el = self._last_el + max_s * (1.0 if del_ > 0 else -1.0)
+        # If the innovation was tiny, zero velocity — talker is stationary
+        if abs(daz) < 1.0 and abs(del_) < 1.0:
+            self.x[2] = 0.0
+            self.x[3] = 0.0
         self.x[0], self.x[1] = az, el
         self._last_az, self._last_el = az, el
         return az, el

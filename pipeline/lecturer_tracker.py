@@ -108,6 +108,12 @@ class LecturerTracker:
         self._el_hist: deque[float] = deque(maxlen=max(1, win))
         self._last_good_az: Optional[float] = None
         self._last_good_el: Optional[float] = None
+        self._locked_az: Optional[float] = None
+        self._locked_el: Optional[float] = None
+
+        # High-pass filter state (built lazily on first block)
+        self._hpf_sos = None
+        self._hpf_zi = None
 
         # GUI-controllable switches
         self._mic_enabled = True     # False → audio discarded, no VAD / DOA / servo
@@ -129,6 +135,7 @@ class LecturerTracker:
             "vad_gain": 1.0,
             "vad_peak": 0.0,
             "speech": False,
+            "bearing_locked": False,
             "azimuth_deg": 0.0,
             "elevation_deg": 0.0,
             "confidence": 0.0,
@@ -211,6 +218,8 @@ class LecturerTracker:
         self._el_hist.clear()
         self._last_good_az = None
         self._last_good_el = None
+        self._locked_az = None
+        self._locked_el = None
         self.kalman.reset(0.0, 0.0)
 
     @property
@@ -292,6 +301,32 @@ class LecturerTracker:
             self._stop.set()
             self.running = False
 
+    # ── audio conditioning ─────────────────────────────────────────────────
+    def _condition_block(self, block: np.ndarray) -> np.ndarray:
+        """
+        1) Re-order captured I2S channels to logical M0..M3 (config.MIC_CHANNEL_ORDER).
+        2) High-pass all channels (config.AUDIO_HIGHPASS_HZ) — the raw INMP441 feed on
+           the Pi is >98 % sub-150 Hz rumble that carries no bearing information.
+        Filter state persists across blocks so there are no seams.
+        """
+        order = tuple(getattr(cfg, "MIC_CHANNEL_ORDER", range(cfg.NUM_MICS)))
+        if block.shape[1] >= len(order) and tuple(order) != tuple(range(len(order))):
+            block = block[:, list(order)]
+
+        hp_hz = float(getattr(cfg, "AUDIO_HIGHPASS_HZ", 0.0) or 0.0)
+        if hp_hz <= 0.0:
+            return block
+        if self._hpf_sos is None:
+            from scipy.signal import butter, sosfilt_zi
+
+            self._hpf_sos = butter(4, hp_hz, btype="highpass", fs=cfg.SAMPLE_RATE, output="sos")
+            zi = sosfilt_zi(self._hpf_sos)  # (n_sections, 2)
+            self._hpf_zi = np.repeat(zi[:, :, None], block.shape[1], axis=2) * 0.0
+        from scipy.signal import sosfilt
+
+        y, self._hpf_zi = sosfilt(self._hpf_sos, block.astype(np.float64), axis=0, zi=self._hpf_zi)
+        return y.astype(np.float32)
+
     # ── processing ─────────────────────────────────────────────────────────
     def _process_loop(self) -> None:
         mono_carry = np.zeros(0, dtype=np.float32)
@@ -317,6 +352,7 @@ class LecturerTracker:
                     self._last_result["t"] = time.time()
                 continue
 
+            block = self._condition_block(block)
             n_ch = min(block.shape[1], cfg.NUM_MICS)
             # Per-mic levels (EMA for stable meters)
             for ch in range(n_ch):
@@ -432,18 +468,33 @@ class LecturerTracker:
                     self._last_good_az, self._last_good_el = az_m, el_m
 
                 if self._az_hist and conf >= cfg.CONFIDENCE_THRESHOLD:
-                    measurement = (
+                    cand = (
                         float(np.median(self._az_hist)),
                         float(np.median(self._el_hist)),
                     )
-                    if self._diag:
-                        self._diag_last_az, self._diag_last_el = measurement
-                        self._diag_last_conf = conf
+                    # Hold gate vs the *locked* bearing (not every noisy peak)
+                    hold = float(getattr(cfg, "BEARING_HOLD_DEG", 4.0))
+                    if self._locked_az is None:
+                        measurement = cand
+                    else:
+                        daz_h = (cand[0] - self._locked_az + 180.0) % 360.0 - 180.0
+                        del_h = cand[1] - self._locked_el
+                        if abs(daz_h) >= hold or abs(del_h) >= hold:
+                            measurement = cand
+                    if measurement is not None:
+                        self._locked_az, self._locked_el = measurement
+                        if self._diag:
+                            self._diag_last_az, self._diag_last_el = measurement
+                            self._diag_last_conf = conf
 
         az, el = self.kalman.step(
             measurement=measurement,
             confidence=None if measurement is None else conf,
         )
+        # Arrow / radar: freeze on locked bearing while speech hangover holds
+        locked = bool(speech and self._locked_az is not None)
+        if locked:
+            az, el = float(self._locked_az), float(self._locked_el)
 
         # Only command HAT when still in speech hangover AND peak is strong
         servo_conf = conf if (speech and conf >= move_thr and measurement) else 0.0
@@ -459,6 +510,7 @@ class LecturerTracker:
             "vad_gain": float(classification.get("gain", 1.0)),
             "vad_peak": float(classification.get("peak", 0.0)),
             "speech": speech,
+            "bearing_locked": locked if speech else False,
             "azimuth_deg": az,
             "elevation_deg": el,
             "confidence": conf,

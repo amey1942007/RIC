@@ -5,7 +5,8 @@ Requires 16 kHz mono float32 audio in 512-sample chunks.
 Outputs speech probability in [0, 1]; threshold default 0.5.
 
 Far-field note: Silero ships one main model (v6 JIT). Quiet distant speech
-drops confidence unless we peak-normalize (AGC) before inference.
+drops confidence; AGC (``normalize=True``) can help later. Default for
+debugging is raw audio (``config.VAD_NORMALIZE = False``).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ class SileroVAD:
         threshold: float = 0.5,
         device: Optional[str] = None,
         *,
-        normalize: bool = True,
+        normalize: bool = False,
         target_peak: float = 0.6,
         noise_floor: float = 0.004,
         max_gain: float = 40.0,

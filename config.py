@@ -13,15 +13,26 @@ SAMPLE_RATE = 16_000          # Silero VAD requires 16 kHz
 VAD_CHUNK_SAMPLES = 512       # Silero window @ 16 kHz
 # Slightly stricter gate + hangover reduces clap/noise yanking the HAT
 VAD_THRESHOLD = 0.58
+# Measured on the Pi (Sep 23): raw INMP441 speech peaks ≈0.02 → Silero never fires
+# without level normalisation (0 usable runs vs 7 with AGC). Keep True.
 VAD_NORMALIZE = True
 VAD_TARGET_PEAK = 0.55
-VAD_NOISE_FLOOR = 0.008       # ignore quieter than this for AGC
-VAD_MAX_GAIN = 20.0           # limited far-field boost (less noise amp)
+VAD_NOISE_FLOOR = 0.008       # used only when VAD_NORMALIZE is True
+VAD_MAX_GAIN = 20.0           # used only when VAD_NORMALIZE is True
 VAD_SPEECH_ON_CHUNKS = 4      # ~128 ms sustained speech before track
 VAD_SPEECH_OFF_CHUNKS = 15    # ~480 ms hangover after speech ends
 NUM_MICS = 4
 CHANNELS = 4
 AUDIO_DEVICE_NAME = "ricinmp4414ch"
+# Captured I2S channel index for each logical mic M0..M3 (positions below stay fixed).
+# I2S slots: SD1 → ch0 (L) / ch1 (R), SD2 → ch2 (L) / ch3 (R). Both data lines were
+# wired L = left mic, so ch2 = bottom-LEFT (M3) and ch3 = bottom-RIGHT (M2).
+# Verified on the Pi by SRP-PHAT consistency test (this order ranks 1/24, az std 27°→17°).
+MIC_CHANNEL_ORDER = (0, 1, 3, 2)
+# Measured: >98 % of raw energy is < 150 Hz (rumble / servo vibration) — no direction
+# info at those wavelengths for a 6 cm array and it swamps the VAD. High-pass everything.
+AUDIO_HIGHPASS_HZ = 120.0     # 4th-order Butterworth, applied to all 4 channels; 0 = off
+SRP_BAND_HZ = (300.0, 4000.0) # GCC-PHAT bins outside this band are ignored (speech band)
 
 # ── Mic geometry (vertical 6 cm square) ────────────────────────────────────
 # Mount array centre near speaker *mouth height* (~1.4–1.6 m standing),
@@ -54,6 +65,7 @@ CONFIDENCE_THRESHOLD = 0.58   # ignore weak / noisy peaks
 CONFIDENCE_MOVE_THRESHOLD = 0.65  # only move HAT above this
 SRP_MEDIAN_WINDOW = 5         # median of last N peaks before Kalman
 SRP_MAX_JUMP_DEG = 25.0       # reject single-frame outliers vs last good
+BEARING_HOLD_DEG = 4.0        # ignore SRP updates smaller than this (stops spin on a static talker)
 SRP_ADAPTIVE_SEARCH = True    # coarse-to-fine search (False = legacy full dense grid)
 SRP_COARSE_STEP_MULTIPLIER = 3  # pass-1 step = this × AZIMUTH/ELEVATION_STEP_DEG
 SRP_VOLUME_NEIGHBORS = 1      # ±N fine cells averaged per candidate ("modified SRP-PHAT"); 0 = off
@@ -89,7 +101,8 @@ TILT_MIN_DEG = 80.0           # top / up
 TILT_MAX_DEG = 180.0          # bottom / down
 TILT_FRONT_DEG = 145.0        # camera faces you when array is at eye level
 TILT_INVERTED = True          # up → toward TILT_MIN (80)
-DEAD_ZONE_DEG = 4.0
+TRACK_TILT = False            # False = pan-only: tilt held at TILT_FRONT_DEG (elevation is the weak axis)
+DEAD_ZONE_DEG = 3.0
 SERVO_MAX_SPEED_DEG_S = 35.0
 SERVO_EMA_ALPHA = 0.18
 POSITION_FILE = Path("/var/lib/camera/last_position.json")

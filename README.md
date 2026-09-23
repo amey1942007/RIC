@@ -64,6 +64,12 @@ RIC/
 | SD2 (M2+M3) | **15** | **22** |
 | 3V3 / GND | 1/17 + GND | — |
 
+Captured channel → mic is set by `MIC_CHANNEL_ORDER` in `config.py` (currently
+`(0, 1, 3, 2)`: SD2/L is the bottom-**left** mic). If you rewire, re-check with
+`scripts/check_rpi_4ch_mics.py` — it prints which corner each channel maps to.
+All channels are high-passed at `AUDIO_HIGHPASS_HZ` (120 Hz) and GCC-PHAT uses
+only `SRP_BAND_HZ` (300–4000 Hz); the raw Pi feed is >98 % sub-150 Hz rumble.
+
 ## Waveshare Pan-Tilt HAT
 
 tilt=`S0`, pan=`S1`, I2C `0x40`. Brown=GND, Red=5V, Orange=PWM.

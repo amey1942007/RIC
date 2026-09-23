@@ -57,11 +57,15 @@ class ServoController:
                 self.kit = None
 
         self.pan_deg, self.tilt_deg = self._load_position()
+        # Always re-clamp to current config (e.g. PAN_MAX=150) so a stale
+        # last_position.json cannot drive the ribbon past the safe window.
+        self.pan_deg = float(np_clip(self.pan_deg, cfg.PAN_MIN_DEG, cfg.PAN_MAX_DEG))
+        self.tilt_deg = float(np_clip(self.tilt_deg, cfg.TILT_MIN_DEG, cfg.TILT_MAX_DEG))
         self._cmd_pan = float(self.pan_deg)
         self._cmd_tilt = float(self.tilt_deg)
         self._last_apply_t = 0.0
         if not self.simulate:
-            self._apply(self.pan_deg, self.tilt_deg, force=True)
+            self._apply(self.pan_deg, self.tilt_deg, force=False)
         log.info(
             "ServoController ready (simulate=%s, addr=0x%02X) pan=%.1f tilt=%.1f",
             self.simulate,
@@ -186,6 +190,9 @@ class ServoController:
     def go_home(self) -> None:
         """
         Drive both servos to 0° — Waveshare step BEFORE assembling the bracket.
+
+        This is the only path allowed outside the runtime pan/tilt window
+        (ribbon-safe PAN_MAX etc.). Do not call from the live pipeline/GUI.
         """
         self._apply(0.0, 0.0, force=True)
         log.warning(
@@ -194,10 +201,10 @@ class ServoController:
         )
 
     def go_center(self) -> None:
-        """Front pose: pan = PAN_FRONT_DEG, tilt = TILT_FRONT_DEG."""
+        """Front pose: pan = PAN_FRONT_DEG, tilt = TILT_FRONT_DEG (config clamps)."""
         pan, tilt = self.front_pose()
-        self._apply(pan, tilt, force=True)
-        self._cmd_pan, self._cmd_tilt = float(pan), float(tilt)
+        self._apply(pan, tilt, force=False)
+        self._cmd_pan, self._cmd_tilt = float(self.pan_deg), float(self.tilt_deg)
 
     def set_angles(self, pan_deg: float, tilt_deg: float, force: bool = False) -> None:
         """Direct pan/tilt command in servo degrees (tests / GUI manual mode)."""
@@ -220,6 +227,8 @@ class ServoController:
             return self.pan_deg, self.tilt_deg
 
         target_pan, target_tilt = self.map_angles(azimuth_deg, elevation_deg)
+        if not bool(getattr(cfg, "TRACK_TILT", True)):
+            target_tilt = self.front_pose()[1]  # pan-only mode
         d_pan = abs(target_pan - self.pan_deg)
         d_tilt = abs(target_tilt - self.tilt_deg)
         if d_pan < cfg.DEAD_ZONE_DEG and d_tilt < cfg.DEAD_ZONE_DEG:
