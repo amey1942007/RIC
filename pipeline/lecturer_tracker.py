@@ -130,6 +130,10 @@ class LecturerTracker:
         self._last_good_el: Optional[float] = None
         self._locked_az: Optional[float] = None
         self._locked_el: Optional[float] = None
+        # Last *valid* steering target. Never fall back to 0° just because
+        # the gate went quiet — silence / lost person = hold this bearing.
+        self._held_az: Optional[float] = None
+        self._held_el: Optional[float] = None
 
         # High-pass filter state (built lazily on first block)
         self._hpf_sos = None
@@ -268,7 +272,9 @@ class LecturerTracker:
         self._last_good_el = None
         self._locked_az = None
         self._locked_el = None
-        self.kalman.reset(0.0, 0.0)
+        hold_az = 0.0 if self._held_az is None else float(self._held_az)
+        hold_el = 0.0 if self._held_el is None else float(self._held_el)
+        self.kalman.reset(hold_az, hold_el)
         self.person_lock.reset("tracking-reset")
         if self.face_tracker is not None:
             self.face_tracker.reacquire()
@@ -536,7 +542,10 @@ class LecturerTracker:
         move_thr = float(
             getattr(cfg, "CONFIDENCE_MOVE_THRESHOLD", cfg.CONFIDENCE_THRESHOLD)
         )
-        if speech and len(self._ring) >= cfg.SRP_FRAME_SAMPLES:
+        # Hangover keeps `_tracking` True after the sound stops so the HAT does
+        # not twitch off. It must NOT keep running SRP: quiet/rumble frames
+        # peak at az=0 and yank the camera back to front after every clap.
+        if raw_speech and len(self._ring) >= cfg.SRP_FRAME_SAMPLES:
             multi = np.stack(list(self._ring), axis=0)  # (N, 4)
             loc = self.localizer.localize(multi)
             conf = float(loc["confidence"])
@@ -591,18 +600,20 @@ class LecturerTracker:
             measurement=measurement,
             confidence=None if measurement is None else conf,
         )
-        # Arrow / radar: freeze on locked bearing while speech hangover holds
-        locked = bool(speech and self._locked_az is not None)
+        # Arrow / radar: last accepted bearing, never the 0° Kalman default
+        locked = bool(self._locked_az is not None)
         if locked:
             az, el = float(self._locked_az), float(self._locked_el)
+        elif self._held_az is not None:
+            az, el = float(self._held_az), float(self._held_el)
 
         face = None
         if self.face_tracker is not None:
             face = self.face_tracker.visible()
         lock = self.person_lock.update(
-            speech=speech,
-            audio_az=az if locked else None,
-            audio_el=el if locked else None,
+            speech=raw_speech,
+            audio_az=self._locked_az if raw_speech else None,
+            audio_el=self._locked_el if raw_speech else None,
             audio_conf=conf,
             face=face,
             pan_deg=float(self.servos.pan_deg),
@@ -615,12 +626,20 @@ class LecturerTracker:
             az, el = float(lock.fused_az), float(lock.fused_el if lock.fused_el is not None else el)
             locked = True
 
-        # AUDIO: only move on a strong speech peak. LOCKED: keep steering from
-        # the fused bearing so a pause < 20 s does not freeze the HAT.
-        if lock.mode == MODE_LOCKED and lock.fused_az is not None:
+        if measurement is not None:
+            self._held_az, self._held_el = float(az), float(el)
+        elif lock.mode == MODE_LOCKED and lock.fused_az is not None and lock.source in ("fused", "visual", "audio"):
+            self._held_az, self._held_el = float(az), float(el)
+        elif self._held_az is not None:
+            az, el = float(self._held_az), float(self._held_el)
+
+        # AUDIO: move only on a fresh raw-speech peak (not hangover / silence).
+        # LOCKED: steer only while the person is still visible or audio is live —
+        # never drive to 0° because the detector missed a frame.
+        if lock.mode == MODE_LOCKED and lock.fused_az is not None and lock.source != "hold":
             servo_conf = max(float(lock.fused_conf), move_thr)
         else:
-            servo_conf = conf if (speech and conf >= move_thr and measurement) else 0.0
+            servo_conf = conf if (raw_speech and conf >= move_thr and measurement) else 0.0
         if self._servo_manual:
             pan, tilt = self.servos.pan_deg, self.servos.tilt_deg
         else:
@@ -633,7 +652,7 @@ class LecturerTracker:
             "vad_gain": float(classification.get("gain", 1.0)),
             "vad_peak": float(classification.get("peak", 0.0)),
             "speech": speech,
-            "bearing_locked": locked if (speech or lock.mode == MODE_LOCKED) else False,
+            "bearing_locked": bool(self._held_az is not None),
             "azimuth_deg": az,
             "elevation_deg": el,
             "confidence": conf,
