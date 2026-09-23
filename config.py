@@ -121,7 +121,7 @@ CAMERA_INDEX = 0              # Picamera2 camera number / V4L2 index (cam 0 = CS
 CAMERA_PREVIEW_WIDTH = 640    # GUI preview size (keeps Pi CPU free for SRP-PHAT)
 CAMERA_PREVIEW_HEIGHT = 360
 CAMERA_FPS = 20               # preview frame rate
-CAMERA_HFLIP = False          # set True if the head is mounted mirrored
-CAMERA_VFLIP = False
+CAMERA_HFLIP = True           # camera is mounted upside-down on the pan-tilt head:
+CAMERA_VFLIP = True           # hflip + vflip = 180° rotation (keeps left/right true)
 
 GUI_REFRESH_MS = 50
