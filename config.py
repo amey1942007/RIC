@@ -25,10 +25,11 @@ NUM_MICS = 4
 CHANNELS = 4
 AUDIO_DEVICE_NAME = "ricinmp4414ch"
 # Captured I2S channel index for each logical mic M0..M3 (positions below stay fixed).
-# I2S slots: SD1 → ch0 (L) / ch1 (R), SD2 → ch2 (L) / ch3 (R). Both data lines were
-# wired L = left mic, so ch2 = bottom-LEFT (M3) and ch3 = bottom-RIGHT (M2).
-# Verified on the Pi by SRP-PHAT consistency test (this order ranks 1/24, az std 27°→17°).
-MIC_CHANNEL_ORDER = (0, 1, 3, 2)
+# I2S slots: SD1 → ch0 (L) / ch1 (R), SD2 → ch2 (L) / ch3 (R). Top pair is wired
+# R = top-left (M0) / L = top-right (M1); bottom pair L = bottom-right (M2) / R = bottom-left (M3).
+# Set by `scripts/check_rpi_4ch_mics.py --side left` (talker on the left → negative azimuth).
+# Its mirror (0, 1, 3, 2) is equally SRP-consistent but swaps left/right.
+MIC_CHANNEL_ORDER = (1, 0, 2, 3)
 # Measured: >98 % of raw energy is < 150 Hz (rumble / servo vibration) — no direction
 # info at those wavelengths for a 6 cm array and it swamps the VAD. High-pass everything.
 AUDIO_HIGHPASS_HZ = 120.0     # 4th-order Butterworth, applied to all 4 channels; 0 = off
