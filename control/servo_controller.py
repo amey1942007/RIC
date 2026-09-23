@@ -135,13 +135,11 @@ class ServoController:
     @staticmethod
     def map_angles(azimuth_deg: float, elevation_deg: float) -> Tuple[float, float]:
         """
-        SRP azimuth/elevation → Waveshare pan/tilt degrees.
+        SRP → Waveshare PWM (matches physical array + HAT).
 
-        Pan: az -90..+90 → PAN_MIN..PAN_MAX (front → mid pan)
-
-        Tilt (this hardware: 80=top/up, 180=bottom/down):
-          TILT_INVERTED=True  → el up → toward TILT_MIN (80)
-                              → el down → toward TILT_MAX (180)
+        Mics (front view): M0 TL, M1 TR, M2 BR, M3 BL
+        Pan:  0=left, 90=front centre, 180=right
+        Tilt: 80=up, 145=eye-level front, 180=down
         """
         az = float(np_clip(azimuth_deg, cfg.AZIMUTH_MIN_DEG, cfg.AZIMUTH_MAX_DEG))
         el = float(np_clip(elevation_deg, cfg.ELEVATION_MIN_DEG, cfg.ELEVATION_MAX_DEG))
@@ -151,22 +149,26 @@ class ServoController:
         )
         pan = cfg.PAN_MIN_DEG + az_norm * (cfg.PAN_MAX_DEG - cfg.PAN_MIN_DEG)
 
-        el_span = cfg.ELEVATION_MAX_DEG - cfg.ELEVATION_MIN_DEG
-        el_norm = (el - cfg.ELEVATION_MIN_DEG) / el_span if el_span else 0.0
-        # Also invert for ceiling mount (looking down into room)
-        invert = bool(getattr(cfg, "TILT_INVERTED", False)) or (
-            getattr(cfg, "ARRAY_MOUNT", "vertical_stand") == "ceiling"
-        )
-        if invert:
-            tilt = cfg.TILT_MAX_DEG - el_norm * (cfg.TILT_MAX_DEG - cfg.TILT_MIN_DEG)
+        front = float(getattr(cfg, "TILT_FRONT_DEG", 145.0))
+        t_lo = float(cfg.TILT_MIN_DEG)   # 80 up
+        t_hi = float(cfg.TILT_MAX_DEG)   # 180 down
+        front = float(np_clip(front, t_lo, t_hi))
+
+        # el=0 → front (145); el>0 (up) → toward 80; el<0 (down) → toward 180
+        if el >= 0.0:
+            span = max(1e-6, cfg.ELEVATION_MAX_DEG)
+            t = float(np_clip(el / span, 0.0, 1.0))
+            tilt = front + t * (t_lo - front)
         else:
-            tilt = cfg.TILT_MIN_DEG + el_norm * (cfg.TILT_MAX_DEG - cfg.TILT_MIN_DEG)
+            span = max(1e-6, abs(cfg.ELEVATION_MIN_DEG))
+            t = float(np_clip((-el) / span, 0.0, 1.0))
+            tilt = front + t * (t_hi - front)
+
         return pan, tilt
 
     def go_home(self) -> None:
         """
-        Drive both servos to 0° — Waveshare required step BEFORE assembling
-        the bracket (prevents binding / burnout).
+        Drive both servos to 0° — Waveshare step BEFORE assembling the bracket.
         """
         self._apply(0.0, 0.0, force=True)
         log.warning(
@@ -175,9 +177,9 @@ class ServoController:
         )
 
     def go_center(self) -> None:
-        """Look straight ahead (mid pan / mid tilt)."""
+        """Front pose: pan mid, tilt eye-level front."""
         pan = 0.5 * (cfg.PAN_MIN_DEG + cfg.PAN_MAX_DEG)
-        tilt = 0.5 * (cfg.TILT_MIN_DEG + cfg.TILT_MAX_DEG)
+        tilt = float(getattr(cfg, "TILT_FRONT_DEG", 0.5 * (cfg.TILT_MIN_DEG + cfg.TILT_MAX_DEG)))
         self._apply(pan, tilt, force=True)
 
     def set_angles(self, pan_deg: float, tilt_deg: float, force: bool = False) -> None:

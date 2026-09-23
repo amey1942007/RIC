@@ -65,16 +65,17 @@ KALMAN_MAX_VEL_DEG_S = 30.0
 
 # ── Servo / Waveshare Pan-Tilt HAT ─────────────────────────────────────────
 # Probe limits with:  .venv/bin/python scripts/servo_interactive.py
-# then `save` — values below are clamped for any out-of-range command.
 PCA9685_ADDRESS = 0x40
 TILT_CHANNEL = 0              # S0
 PAN_CHANNEL = 1               # S1
-PAN_MIN_DEG = 20.0            # <-- set after interactive probe
-PAN_MAX_DEG = 160.0
-# Hardware: 80 = look up (top), 180 = look down (bottom)
-TILT_MIN_DEG = 80.0
-TILT_MAX_DEG = 180.0
-TILT_INVERTED = True          # True → higher elevation → smaller PWM (toward 80)
+# Pan: 0 = left, 90 = front (centered on array), 180 = right
+PAN_MIN_DEG = 0.0
+PAN_MAX_DEG = 180.0
+# Tilt: 80 = highest (look up), 145 = eye-level front, 180 = lowest (look down)
+TILT_MIN_DEG = 80.0           # top / up
+TILT_MAX_DEG = 180.0          # bottom / down
+TILT_FRONT_DEG = 145.0        # camera faces you when array is at eye level
+TILT_INVERTED = True          # up → toward TILT_MIN (80)
 DEAD_ZONE_DEG = 4.0
 SERVO_MAX_SPEED_DEG_S = 35.0
 SERVO_EMA_ALPHA = 0.18
