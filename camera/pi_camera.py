@@ -229,7 +229,7 @@ class CameraFeed:
         """Undo picamera2 BGR-in-RGB888 and/or a photographic-negative look."""
         if frame is None or frame.ndim != 3:
             return frame
-        if swap_rb and bool(getattr(cfg, "CAMERA_SWAP_RB", True)):
+        if swap_rb and bool(getattr(cfg, "CAMERA_SWAP_RB", False)):
             frame = frame[:, :, ::-1]
         if bool(getattr(cfg, "CAMERA_INVERT_COLORS", False)):
             frame = 255 - frame

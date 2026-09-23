@@ -428,16 +428,16 @@ class LiveDashboard:
         if self.camera is None:
             return
         try:
-            from vision.face_tracker import FaceTracker
+            from vision.person_tracker import PersonTracker
 
-            ft = FaceTracker(self.camera)
+            ft = PersonTracker(self.camera)
             if ft.start():
                 self.face_tracker = ft
                 self.tracker.attach_vision(ft)
             else:
-                log.warning("FaceTracker not started: %s", ft.error)
+                log.warning("PersonTracker not started: %s", ft.error)
         except Exception as exc:
-            log.warning("FaceTracker init failed: %s", exc)
+            log.warning("PersonTracker init failed: %s", exc)
 
     def _stop_face_tracker(self) -> None:
         self.tracker.attach_vision(None)
@@ -476,11 +476,11 @@ class LiveDashboard:
                 c.itemconfigure(self._cam_img_id, image=self._photo)
                 c.coords(self._cam_img_id, w / 2, h / 2)
             self._set_pill(self.pill_cam, f"CAM {self.camera.backend.upper()}", VIOLET)
-            face_fps = ""
+            vis = ""
             if self.face_tracker is not None and self.face_tracker.available:
-                face_fps = f"  face {self.face_tracker.fps_measured:3.0f} Hz"
+                vis = f"  person {self.face_tracker.backend} {self.face_tracker.fps_measured:3.0f} Hz"
             self.cam_info.configure(
-                text=f"{fw}×{fh}  {self.camera.measured_fps:4.1f} fps{face_fps}", fg=MUTED
+                text=f"{fw}×{fh}  {self.camera.measured_fps:4.1f} fps{vis}", fg=MUTED
             )
 
         # HUD — crosshair, bearing ticker, speech ring
@@ -504,16 +504,23 @@ class LiveDashboard:
             c.create_text(w - 48, 22, text=tag, fill=BAD, anchor="e", font=(MONO, 10, "bold"), tags="hud")
 
         box = s.get("face_box")
+        if (not box or box == (0, 0, 0, 0)) and self.face_tracker is not None:
+            tr = self.face_tracker.latest()
+            if tr is not None and tr.age() <= 1.5:
+                box = tr.box_px
         if box and tw > 0 and fw > 0:
-            bx, by, bw, bh = box
-            sx, sy = tw / fw, th / fh
-            x0, y0 = ox + bx * sx, oy + by * sy
-            x1, y1 = x0 + bw * sx, y0 + bh * sy
-            col = OK if lock_mode == "LOCKED" else ACCENT
-            c.create_rectangle(x0, y0, x1, y1, outline=col, width=2, tags="hud")
-            src = str(s.get("lock_source") or "")
-            c.create_text(x0 + 4, max(14, y0 - 10), text=src or "face",
-                          fill=col, anchor="w", font=(MONO, 9, "bold"), tags="hud")
+            bx, by, bw, bh = [float(v) for v in box]
+            if bw > 2 and bh > 2:
+                sx, sy = tw / fw, th / fh
+                x0, y0 = ox + bx * sx, oy + by * sy
+                x1, y1 = x0 + bw * sx, y0 + bh * sy
+                col = OK if lock_mode == "LOCKED" else ACCENT
+                c.create_rectangle(x0, y0, x1, y1, outline=col, width=2, tags="hud")
+                label = "PERSON"
+                if lock_mode == "LOCKED":
+                    label += f" · {s.get('lock_source') or 'lock'}"
+                c.create_text(x0 + 4, max(14, y0 - 10), text=label,
+                              fill=col, anchor="w", font=(MONO, 9, "bold"), tags="hud")
 
         # where the sound is relative to the camera's current pan (HFOV≈66° for CM3 wide-ish)
         az = float(s.get("azimuth_deg") or 0.0)
