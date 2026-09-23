@@ -2,23 +2,39 @@
 
 Raspberry Pi 5: **Silero VAD → SRP-PHAT → Kalman → Waveshare Pan-Tilt HAT**.
 
-Mic array: **4× INMP441**, vertical 6 cm square.  
-HAT: [Waveshare Pan-Tilt HAT](https://www.waveshare.com/wiki/Pan-Tilt_HAT) (PCA9685 @ `0x40`, tilt=`S0`, pan=`S1`).
+## How the pieces fit (not duplicates)
+
+```
+./run_gui.sh                          # thin shell: venv + DISPLAY
+        │
+        ▼
+vad_srp_phat_pipeline.py              # ONLY CLI entry (--no-gui / --real-servos)
+        │
+        ├─ GUI path  → gui/live_dashboard.py
+        │                     │
+        └─ headless  ─────────┴──► pipeline/lecturer_tracker.py
+                                   (real engine: capture → VAD → SRP → Kalman → HAT)
+```
+
+| File | Role |
+|------|------|
+| `run_gui.sh` | Convenience launcher on Pi |
+| `vad_srp_phat_pipeline.py` | CLI / flags |
+| `pipeline/lecturer_tracker.py` | Core tracking logic (library, not a second app) |
+| `gui/live_dashboard.py` | Tk meters / DOA / pan-tilt display |
 
 ## Layout
 
 ```
 RIC/
-  install.sh / install.ps1
-  run_gui.sh
+  install.sh / install.ps1 / run_gui.sh
   vad_srp_phat_pipeline.py
   config.py
   gui/live_dashboard.py
   audio/  control/  pipeline/
   overlays/ric-inmp441-4ch-overlay.dts
   scripts/check_rpi_4ch_mics.py
-  scripts/home_pantilt.py      # Waveshare 0° home BEFORE assembly
-  scripts/test_pantilt.py
+  scripts/servo_interactive.py   # home + limits + move (one tool)
   requirements.txt
 ```
 
@@ -34,68 +50,28 @@ RIC/
 
 ## Waveshare Pan-Tilt HAT
 
-HAT sits on the 40-pin header. Servos:
+tilt=`S0`, pan=`S1`, I2C `0x40`. Brown=GND, Red=5V, Orange=PWM.
 
-| Servo | HAT pad | Channel |
-|-------|---------|---------|
-| Tilt (B) | **S0** | 0 |
-| Pan (A) | **S1** | 1 |
+**Do not assemble servos until home (0°)** — use interactive tool below.
 
-Wire colours: Brown→GND, Red→5V, Orange→S0/S1.
-
-**Do not assemble servos into the bracket until home (0°) is done** — see Waveshare wiki.
-
-## Install (on the Pi)
+## Install / run
 
 ```bash
 cd ~/RIC
 chmod +x install.sh run_gui.sh
-./install.sh
-./install.sh --overlay
-sudo reboot
-```
+./install.sh && ./install.sh --overlay && sudo reboot
 
-After reboot, confirm I2C + mics:
-
-```bash
-sudo i2cdetect -y 1          # expect "40" (PCA9685)
-arecord -l                   # ric-inmp441-4ch
+sudo i2cdetect -y 1
 .venv/bin/python scripts/check_rpi_4ch_mics.py
-```
 
-### HAT first-time (Waveshare order)
+# Servos free to spin → home, then assemble, then probe limits:
+.venv/bin/python scripts/servo_interactive.py
+# home | pan 90 | setpanmin 25 | settiltmax 140 | save
 
-```bash
-# 1) Servos plugged in but NOT mounted in bracket (free to spin)
-.venv/bin/python scripts/home_pantilt.py
-
-# 2) Power off → assemble bracket (don't twist tilt horn) → power on
-.venv/bin/python scripts/test_pantilt.py
-
-# 3) Live tracking → HAT
 ./run_gui.sh --real-servos
-```
-
-The pipeline sends SRP azimuth/elevation to the HAT every speech frame (GUI shows pan/tilt).
-
-## Run
-
-```bash
-./run_gui.sh --real-servos     # audio + GUI + HAT
-./run_gui.sh --simulate-servos # audio + GUI, no PWM
 ./run_gui.sh --no-gui --real-servos
 ```
 
-## Find servo hardware limits
-
-```bash
-.venv/bin/python scripts/servo_interactive.py
-# pan 90 | tilt 40 | +pan 5 | setpanmin 25 | settiltmax 140 | save
-```
-
-Any tracking command outside `PAN_*` / `TILT_*` is clamped to those extremes.
-
 ## Mic height
 
-Mount the **centre of the 6 cm square near mouth height** (~1.4–1.6 m standing,
-or seated speaking height). Eye-level is fine. Not floor / not high ceiling.
+Array **centre near mouth height** (~1.4–1.6 m standing). Not floor / not ceiling.

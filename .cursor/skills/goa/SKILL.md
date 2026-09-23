@@ -39,7 +39,7 @@ Create a complete robust pipeline with working srp phat audio location of speake
 
 ```bash
 .venv/bin/python scripts/servo_interactive.py
-# pan / tilt / +pan / setpanmin / settiltmax / save
+# home | pan / tilt / +pan / setpanmin / settiltmax / save
 ```
 
 ## Verify mics / run

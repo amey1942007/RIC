@@ -350,16 +350,3 @@ class LecturerTracker:
                 pan,
                 tilt,
             )
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
-    tracker = LecturerTracker()
-    tracker.run_forever()
-
-
-if __name__ == "__main__":
-    main()

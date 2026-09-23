@@ -9,8 +9,9 @@ Shows:
   • pan / tilt HAT commanded angles
 
 Run from repo root:
-  python -m gui.live_dashboard
-  python vad_srp_phat_pipeline.py --gui
+  ./run_gui.sh
+  python vad_srp_phat_pipeline.py
+  python vad_srp_phat_pipeline.py --no-gui
 """
 from __future__ import annotations
 

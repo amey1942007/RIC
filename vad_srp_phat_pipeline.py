@@ -1,13 +1,11 @@
 """
-vad_srp_phat_pipeline.py
-========================
-Combined entry point for the lecturer-tracking audio stack.
+vad_srp_phat_pipeline.py — single CLI entry for the lecturer-tracking stack.
 
-Usage (Raspberry Pi with display):
-  ./install.sh
-  ./run_gui.sh
-  ./run_gui.sh --no-gui
-  ./run_gui.sh --simulate-servos
+  ./run_gui.sh                 → this file (venv + DISPLAY)
+  python vad_srp_phat_pipeline.py [--no-gui] [--real-servos]
+
+Engine lives in pipeline/lecturer_tracker.py (LecturerTracker).
+GUI lives in gui/live_dashboard.py (wraps LecturerTracker).
 """
 from __future__ import annotations
 
@@ -20,19 +18,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from audio.silero_vad import SileroVAD  # noqa: E402
-from audio.srp_phat import SRPPhatLocalizer  # noqa: E402
-from audio.kalman import KalmanFilter2D  # noqa: E402
-from control.servo_controller import ServoController  # noqa: E402
 from pipeline.lecturer_tracker import LecturerTracker  # noqa: E402
-
-__all__ = [
-    "SileroVAD",
-    "SRPPhatLocalizer",
-    "KalmanFilter2D",
-    "ServoController",
-    "LecturerTracker",
-]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -56,18 +42,19 @@ def main(argv: list[str] | None = None) -> None:
     )
     log = logging.getLogger(__name__)
 
-    simulate: bool | None
     if args.simulate_servos:
-        simulate = True
+        simulate: bool | None = True
     elif args.real_servos:
         simulate = False
     else:
         simulate = None  # auto-detect HAT
 
+    import config as cfg
+
     log.info(
         "Pipeline ready | vertical %.0f cm square | mount=%s",
-        __import__("config").MIC_SIDE_M * 100,
-        __import__("config").ARRAY_MOUNT,
+        cfg.MIC_SIDE_M * 100,
+        cfg.ARRAY_MOUNT,
     )
 
     if args.no_gui:
