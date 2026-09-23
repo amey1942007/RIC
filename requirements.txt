@@ -6,7 +6,10 @@ sounddevice>=0.4.6
 soundfile>=0.12
 onnxruntime>=1.16
 smbus2>=0.4
+pillow>=10.0            # camera frame → Tk image in the GUI
 # Pi Waveshare Pan-Tilt HAT (install.sh adds on aarch64):
 # adafruit-blinka
 # adafruit-circuitpython-servokit
 # adafruit-circuitpython-pca9685
+# Pi Camera Module 3 preview: apt python3-picamera2 (install.sh; venv uses
+# --system-site-packages). Dev PCs may use `pip install opencv-python` for a webcam.

@@ -109,6 +109,18 @@ class LecturerTracker:
         self._last_good_az: Optional[float] = None
         self._last_good_el: Optional[float] = None
 
+        # GUI-controllable switches
+        self._mic_enabled = True     # False → audio discarded, no VAD / DOA / servo
+        self._servo_manual = False   # True → pipeline never commands the HAT
+        self._servo_lock = threading.Lock()
+
+        # VAD-gating diagnostics (config.VAD_DIAGNOSTIC_LOGGING)
+        self._diag = bool(getattr(cfg, "VAD_DIAGNOSTIC_LOGGING", False))
+        self._tracking_start_t: Optional[float] = None
+        self._diag_last_az: Optional[float] = None
+        self._diag_last_el: Optional[float] = None
+        self._diag_last_conf: float = 0.0
+
     @staticmethod
     def _empty_result() -> dict[str, Any]:
         return {
@@ -126,13 +138,80 @@ class LecturerTracker:
             "servo_simulate": True,
             "mic_rms": [0.0] * cfg.NUM_MICS,
             "mic_peak": [0.0] * cfg.NUM_MICS,
+            "mic_enabled": True,
+            "servo_manual": False,
             "t": time.time(),
         }
 
     def snapshot(self) -> dict[str, Any]:
         """Thread-safe copy of the latest pipeline state (for GUI)."""
         with self._lock:
-            return dict(self._last_result)
+            s = dict(self._last_result)
+        s["mic_enabled"] = self._mic_enabled
+        s["servo_manual"] = self._servo_manual
+        s["pan_deg"] = float(self.servos.pan_deg)
+        s["tilt_deg"] = float(self.servos.tilt_deg)
+        return s
+
+    # ── GUI controls ───────────────────────────────────────────────────────
+    @property
+    def mic_enabled(self) -> bool:
+        return self._mic_enabled
+
+    def set_mic_enabled(self, enabled: bool) -> None:
+        """Mute / un-mute the array. Muting also drops any active track."""
+        enabled = bool(enabled)
+        if enabled == self._mic_enabled:
+            return
+        self._mic_enabled = enabled
+        if not enabled:
+            self._reset_tracking_state()
+            with self._lock:
+                r = dict(self._last_result)
+                r.update(
+                    vad_label="MUTED",
+                    vad_probability=0.0,
+                    speech=False,
+                    confidence=0.0,
+                    localisation=None,
+                    mic_rms=[0.0] * cfg.NUM_MICS,
+                    mic_peak=[0.0] * cfg.NUM_MICS,
+                    t=time.time(),
+                )
+                self._last_result = r
+        log.info("Mic %s", "ON" if enabled else "OFF (muted)")
+
+    @property
+    def servo_manual(self) -> bool:
+        return self._servo_manual
+
+    def set_servo_manual(self, manual: bool) -> None:
+        """Manual = GUI sliders own the HAT; Auto = SRP-PHAT/Kalman own it."""
+        self._servo_manual = bool(manual)
+        log.info("Servo mode: %s", "MANUAL" if manual else "AUTO")
+
+    def manual_servo(self, pan_deg: float, tilt_deg: float) -> tuple[float, float]:
+        """Direct HAT command (clamped to config limits). Only used in manual mode."""
+        with self._servo_lock:
+            self.servos.set_angles(float(pan_deg), float(tilt_deg), force=False)
+            return self.servos.pan_deg, self.servos.tilt_deg
+
+    def servo_center(self) -> tuple[float, float]:
+        """Snap to the front pose (pan 90 / tilt 145) and re-seed the Kalman."""
+        with self._servo_lock:
+            self.servos.go_center()
+        self._reset_tracking_state()
+        return self.servos.pan_deg, self.servos.tilt_deg
+
+    def _reset_tracking_state(self) -> None:
+        self._speech_on = 0
+        self._speech_off = 0
+        self._tracking = False
+        self._az_hist.clear()
+        self._el_hist.clear()
+        self._last_good_az = None
+        self._last_good_el = None
+        self.kalman.reset(0.0, 0.0)
 
     @property
     def last_result(self) -> dict[str, Any]:
@@ -228,6 +307,16 @@ class LecturerTracker:
             if block.ndim == 1:
                 block = block.reshape(-1, 1)
 
+            if not self._mic_enabled:
+                # muted: keep the stream alive but drop everything
+                mono_carry = np.zeros(0, dtype=np.float32)
+                mic_rms[:] = 0.0
+                mic_peak[:] = 0.0
+                self._ring.clear()
+                with self._lock:
+                    self._last_result["t"] = time.time()
+                continue
+
             n_ch = min(block.shape[1], cfg.NUM_MICS)
             # Per-mic levels (EMA for stable meters)
             for ch in range(n_ch):
@@ -263,6 +352,7 @@ class LecturerTracker:
         # Debounce / hangover — ignore brief noise bursts
         on_n = int(getattr(cfg, "VAD_SPEECH_ON_CHUNKS", 3))
         off_n = int(getattr(cfg, "VAD_SPEECH_OFF_CHUNKS", 12))
+        was_tracking = self._tracking
         if raw_speech:
             self._speech_on += 1
             self._speech_off = 0
@@ -273,6 +363,42 @@ class LecturerTracker:
             self._speech_on = 0
             if self._speech_off >= off_n:
                 self._tracking = False
+
+        if self._diag:
+            now = time.time()
+            if self._tracking and not was_tracking:
+                self._tracking_start_t = now
+            elif was_tracking and not self._tracking:
+                active_s = (
+                    now - self._tracking_start_t
+                    if self._tracking_start_t is not None
+                    else 0.0
+                )
+                log.info(
+                    "VAD-DIAG tracking OFF after %.2fs active  last az=%s el=%s conf=%.2f  "
+                    "(off_chunks=%d, p=%.2f)",
+                    active_s,
+                    "—" if self._diag_last_az is None else f"{self._diag_last_az:.1f}",
+                    "—" if self._diag_last_el is None else f"{self._diag_last_el:.1f}",
+                    self._diag_last_conf,
+                    self._speech_off,
+                    prob,
+                )
+                self._tracking_start_t = None
+            thr = float(classification.get("threshold", self.vad.threshold))
+            if abs(prob - thr) <= 0.1:
+                log.debug(
+                    "VAD-DIAG borderline p=%.3f thr=%.2f gain=%.2f peak=%.3f raw=%s "
+                    "on=%d off=%d tracking=%s",
+                    prob,
+                    thr,
+                    float(classification.get("gain", 1.0)),
+                    float(classification.get("peak", 0.0)),
+                    raw_speech,
+                    self._speech_on,
+                    self._speech_off,
+                    self._tracking,
+                )
 
         speech = self._tracking
         measurement = None
@@ -310,6 +436,9 @@ class LecturerTracker:
                         float(np.median(self._az_hist)),
                         float(np.median(self._el_hist)),
                     )
+                    if self._diag:
+                        self._diag_last_az, self._diag_last_el = measurement
+                        self._diag_last_conf = conf
 
         az, el = self.kalman.step(
             measurement=measurement,
@@ -318,7 +447,11 @@ class LecturerTracker:
 
         # Only command HAT when still in speech hangover AND peak is strong
         servo_conf = conf if (speech and conf >= move_thr and measurement) else 0.0
-        pan, tilt = self.servos.set_direction(az, el, confidence=servo_conf)
+        if self._servo_manual:
+            pan, tilt = self.servos.pan_deg, self.servos.tilt_deg
+        else:
+            with self._servo_lock:
+                pan, tilt = self.servos.set_direction(az, el, confidence=servo_conf)
 
         result = {
             "vad_label": classification["label"],
@@ -335,6 +468,8 @@ class LecturerTracker:
             "servo_simulate": self.servos.simulate,
             "mic_rms": mic_rms.tolist(),
             "mic_peak": mic_peak.tolist(),
+            "mic_enabled": True,
+            "servo_manual": self._servo_manual,
             "t": time.time(),
         }
         with self._lock:

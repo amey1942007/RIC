@@ -124,9 +124,17 @@ class ServoController:
                 return float(data["pan_deg"]), float(data["tilt_deg"])
             except Exception as exc:
                 log.warning("Could not load position file: %s", exc)
-        mid_pan = 0.5 * (cfg.PAN_MIN_DEG + cfg.PAN_MAX_DEG)
-        mid_tilt = 0.5 * (cfg.TILT_MIN_DEG + cfg.TILT_MAX_DEG)
-        return mid_pan, mid_tilt
+        return self.front_pose()
+
+    @staticmethod
+    def front_pose() -> Tuple[float, float]:
+        """(pan, tilt) that looks straight ahead at eye level."""
+        pan = float(getattr(cfg, "PAN_FRONT_DEG", 0.5 * (cfg.PAN_MIN_DEG + cfg.PAN_MAX_DEG)))
+        tilt = float(getattr(cfg, "TILT_FRONT_DEG", 0.5 * (cfg.TILT_MIN_DEG + cfg.TILT_MAX_DEG)))
+        return (
+            np_clip(pan, cfg.PAN_MIN_DEG, cfg.PAN_MAX_DEG),
+            np_clip(tilt, cfg.TILT_MIN_DEG, cfg.TILT_MAX_DEG),
+        )
 
     def _save_position(self) -> None:
         payload = {"pan_deg": self.pan_deg, "tilt_deg": self.tilt_deg}
@@ -138,16 +146,25 @@ class ServoController:
         SRP → Waveshare PWM (matches physical array + HAT).
 
         Mics (front view): M0 TL, M1 TR, M2 BR, M3 BL
-        Pan:  0=left, 90=front centre, 180=right
+        Pan:  0=left, PAN_FRONT (90)=front centre, PAN_MAX (150)=right-most
+              (ribbon-cable limit; right half is compressed 90→150)
         Tilt: 80=up, 145=eye-level front, 180=down
         """
         az = float(np_clip(azimuth_deg, cfg.AZIMUTH_MIN_DEG, cfg.AZIMUTH_MAX_DEG))
         el = float(np_clip(elevation_deg, cfg.ELEVATION_MIN_DEG, cfg.ELEVATION_MAX_DEG))
 
-        az_norm = (az - cfg.AZIMUTH_MIN_DEG) / (
-            cfg.AZIMUTH_MAX_DEG - cfg.AZIMUTH_MIN_DEG
-        )
-        pan = cfg.PAN_MIN_DEG + az_norm * (cfg.PAN_MAX_DEG - cfg.PAN_MIN_DEG)
+        # Piecewise pan: az=0 → PAN_FRONT; az>0 (right) → PAN_MAX; az<0 → PAN_MIN
+        p_lo = float(cfg.PAN_MIN_DEG)
+        p_hi = float(cfg.PAN_MAX_DEG)
+        p_front = float(np_clip(getattr(cfg, "PAN_FRONT_DEG", 0.5 * (p_lo + p_hi)), p_lo, p_hi))
+        if az >= 0.0:
+            span = max(1e-6, cfg.AZIMUTH_MAX_DEG)
+            t = float(np_clip(az / span, 0.0, 1.0))
+            pan = p_front + t * (p_hi - p_front)
+        else:
+            span = max(1e-6, abs(cfg.AZIMUTH_MIN_DEG))
+            t = float(np_clip((-az) / span, 0.0, 1.0))
+            pan = p_front + t * (p_lo - p_front)
 
         front = float(getattr(cfg, "TILT_FRONT_DEG", 145.0))
         t_lo = float(cfg.TILT_MIN_DEG)   # 80 up
@@ -177,14 +194,17 @@ class ServoController:
         )
 
     def go_center(self) -> None:
-        """Front pose: pan mid, tilt eye-level front."""
-        pan = 0.5 * (cfg.PAN_MIN_DEG + cfg.PAN_MAX_DEG)
-        tilt = float(getattr(cfg, "TILT_FRONT_DEG", 0.5 * (cfg.TILT_MIN_DEG + cfg.TILT_MAX_DEG)))
+        """Front pose: pan = PAN_FRONT_DEG, tilt = TILT_FRONT_DEG."""
+        pan, tilt = self.front_pose()
         self._apply(pan, tilt, force=True)
+        self._cmd_pan, self._cmd_tilt = float(pan), float(tilt)
 
     def set_angles(self, pan_deg: float, tilt_deg: float, force: bool = False) -> None:
-        """Direct pan/tilt command in servo degrees (for tests)."""
+        """Direct pan/tilt command in servo degrees (tests / GUI manual mode)."""
         self._apply(pan_deg, tilt_deg, force=force)
+        # keep the EMA state in sync so auto mode resumes from here, not from
+        # wherever tracking last left the filter
+        self._cmd_pan, self._cmd_tilt = float(self.pan_deg), float(self.tilt_deg)
 
     def set_direction(
         self,

@@ -4,13 +4,31 @@ SRP-PHAT (Steered Response Power with PHAT weighting) localiser.
 Uses all C(4,2)=6 microphone pairs voting on a shared (azimuth, elevation)
 grid. Designed for a planar square array with 6 cm adjacent mic spacing.
 
+Search strategy (config.SRP_ADAPTIVE_SEARCH):
+  * adaptive (default) — coarse-to-fine: pass 1 evaluates the TDOA grid at
+    ``SRP_COARSE_STEP_MULTIPLIER × fine step``, pass 2 refines only a local
+    window (±1 coarse step) around the best coarse cell at the fine step.
+    Reduces per-frame search cost vs full dense grid; based on
+    modified/adaptive-search SRP-PHAT literature.
+  * brute force — every fine cell evaluated (legacy path, kept for A/B).
+
+"Modified SRP-PHAT" volume accumulation (config.SRP_VOLUME_NEIGHBORS): each
+candidate cell's score is the unweighted mean of the interpolated GCC-PHAT
+value at the cell and its immediate neighbours on the angle grid, which
+stabilises the peak against fractional-delay interpolation error.
+
+The full fine TDOA grid is precomputed up front — at the current config
+(91 az × 46 el × 6 pairs ≈ 25k floats) that is far cheaper than the
+bookkeeping for on-demand fine-grid generation, so the adaptive path simply
+skips evaluation of cells outside the refined window.
+
 Note: the d < λ/2 spatial-aliasing rule applies to delay-and-sum beamforming,
 not to SRP-PHAT voting grids. Classroom-practical spacing limit ~10 cm.
 """
 from __future__ import annotations
 
 from itertools import combinations
-from typing import Dict, Mapping, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from numpy.fft import rfft, irfft
@@ -32,10 +50,36 @@ class SRPPhatLocalizer:
         elevation_range: Tuple[float, float] = (0.0, 60.0),
         azimuth_step: float = 2.0,
         elevation_step: float = 2.0,
+        adaptive: Optional[bool] = None,
+        coarse_multiplier: Optional[int] = None,
+        volume_neighbors: Optional[int] = None,
     ) -> None:
+        import config as cfg
+
         self.sample_rate = int(sample_rate)
         self.speed_of_sound = float(speed_of_sound)
         self.n_fft = int(n_fft)
+
+        # Search-strategy knobs: explicit arg > config > safe default
+        self.adaptive = bool(
+            getattr(cfg, "SRP_ADAPTIVE_SEARCH", True) if adaptive is None else adaptive
+        )
+        self.coarse_multiplier = max(
+            1,
+            int(
+                getattr(cfg, "SRP_COARSE_STEP_MULTIPLIER", 3)
+                if coarse_multiplier is None
+                else coarse_multiplier
+            ),
+        )
+        self.volume_neighbors = max(
+            0,
+            int(
+                getattr(cfg, "SRP_VOLUME_NEIGHBORS", 1)
+                if volume_neighbors is None
+                else volume_neighbors
+            ),
+        )
 
         self.mic_ids = sorted(mic_positions.keys())
         if len(self.mic_ids) < 2:
@@ -83,8 +127,13 @@ class SRPPhatLocalizer:
 
     def _precompute_tdoa_grid(self) -> None:
         """
-        For each (az, el) candidate and each mic pair, store expected sample delay.
-        delay[i→j] = (proj_j - proj_i) / c * fs  (positive ⇒ j further from source).
+        For each fine (az, el) candidate and each mic pair, store expected
+        sample delay.  delay[i→j] = (proj_j - proj_i) / c * fs
+        (positive ⇒ j further from source).
+
+        Also derives the coarse index sets used by pass 1 of the adaptive
+        search (every ``coarse_multiplier``-th fine index, always including
+        the last index so the range edges are covered).
         """
         n_az = len(self.azimuths)
         n_el = len(self.elevations)
@@ -96,7 +145,6 @@ class SRPPhatLocalizer:
                 dvec = self._direction_unit(az, el)
                 for ip, (i, j) in enumerate(self.pairs):
                     # Far-field: τ = (r_i - r_j) · û / c
-                    # Signal at mic i relative to j arrives earlier if i is closer.
                     tau = float(
                         np.dot(self.positions[i] - self.positions[j], dvec)
                         / self.speed_of_sound
@@ -105,6 +153,17 @@ class SRPPhatLocalizer:
 
         # Max |delay| used when aligning GCC peaks
         self.max_delay = int(np.ceil(np.max(np.abs(self.tdoa_samples)))) + 2
+
+        m = self.coarse_multiplier
+        self.coarse_ia = self._coarse_indices(n_az, m)
+        self.coarse_ie = self._coarse_indices(n_el, m)
+
+    @staticmethod
+    def _coarse_indices(n: int, mult: int) -> np.ndarray:
+        idx = np.arange(0, n, mult, dtype=np.int64)
+        if idx[-1] != n - 1:
+            idx = np.append(idx, n - 1)
+        return idx
 
     # ── PHAT GCC ───────────────────────────────────────────────────────────
     def _gcc_phat(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -121,7 +180,7 @@ class SRPPhatLocalizer:
 
     def _interp_peak(self, cc: np.ndarray, delay_samples: float) -> float:
         """
-        Linear-interpolate GCC-PHAT at expected pair delay.
+        Linear-interpolate GCC-PHAT at expected pair delay (scalar helper).
 
         For cc = irfft(Xi * conj(Xj)), if channel j is delayed by +d samples
         relative to i, the peak sits at index (-d) % n (NumPy FFT convention).
@@ -135,6 +194,44 @@ class SRPPhatLocalizer:
         frac = idx - np.floor(idx)
         return float((1.0 - frac) * cc[i0] + frac * cc[i1])
 
+    def _eval_power(
+        self,
+        gcc: np.ndarray,
+        ia_idx: np.ndarray,
+        ie_idx: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Vectorised steered-response power for the cell subset
+        ``ia_idx × ie_idx`` (fine-grid indices).
+
+        gcc : (n_pairs, n_lags) stacked GCC-PHAT correlations.
+        Returns (len(ia_idx), len(ie_idx)) power with volume accumulation
+        over ±volume_neighbors fine-grid cells (unweighted mean).
+        TODO(tuning): try distance-weighted neighbour accumulation.
+        """
+        n_lags = gcc.shape[1]
+        n_pairs = gcc.shape[0]
+        n_az, n_el = self.tdoa_samples.shape[:2]
+        pair_ax = np.arange(n_pairs)[None, None, :]
+
+        nb = self.volume_neighbors
+        acc = np.zeros((len(ia_idx), len(ie_idx)), dtype=np.float64)
+        count = 0
+        for da in range(-nb, nb + 1):
+            ia = np.clip(ia_idx + da, 0, n_az - 1)
+            for de in range(-nb, nb + 1):
+                ie = np.clip(ie_idx + de, 0, n_el - 1)
+                # (na, ne, n_pairs) expected delays
+                T = self.tdoa_samples[np.ix_(ia, ie)]
+                idx = (-T) % n_lags
+                i0 = np.floor(idx).astype(np.int64) % n_lags
+                i1 = (i0 + 1) % n_lags
+                frac = idx - np.floor(idx)
+                vals = (1.0 - frac) * gcc[pair_ax, i0] + frac * gcc[pair_ax, i1]
+                acc += vals.sum(axis=2)
+                count += 1
+        return acc / float(count)
+
     # ── public API ─────────────────────────────────────────────────────────
     def localize(self, multichannel: np.ndarray) -> Dict[str, float]:
         """
@@ -147,36 +244,53 @@ class SRPPhatLocalizer:
 
         Returns
         -------
-        dict with azimuth_deg, elevation_deg, confidence ∈ [0, 1]
+        dict with azimuth_deg, elevation_deg, confidence ∈ [0, 1], srp_peak
         """
         frames = self._as_mic_dict(multichannel)
+        gcc = np.stack(
+            [self._gcc_phat(frames[i], frames[j]) for i, j in self.pairs], axis=0
+        )
+        return self._search(gcc)
 
-        # One GCC-PHAT per pair
-        gccs = []
-        for i, j in self.pairs:
-            gccs.append(self._gcc_phat(frames[i], frames[j]))
+    def _search(self, gcc: np.ndarray) -> Dict[str, float]:
+        """Run adaptive or brute-force grid search over a stacked GCC matrix."""
+        n_az, n_el = self.tdoa_samples.shape[:2]
+        all_ia = np.arange(n_az)
+        all_ie = np.arange(n_el)
 
-        power = np.zeros((len(self.azimuths), len(self.elevations)), dtype=np.float64)
-        for ia in range(len(self.azimuths)):
-            for ie in range(len(self.elevations)):
-                s = 0.0
-                for ip, cc in enumerate(gccs):
-                    s += self._interp_peak(cc, self.tdoa_samples[ia, ie, ip])
-                power[ia, ie] = s
+        if not self.adaptive:
+            power = self._eval_power(gcc, all_ia, all_ie)
+            flat = power.ravel()
+            k = int(np.argmax(flat))
+            ia, ie = np.unravel_index(k, power.shape)
+            best_ia, best_ie = int(all_ia[ia]), int(all_ie[ie])
+            evaluated = flat
+            peak = float(flat[k])
+        else:
+            # Pass 1 — coarse grid
+            p_coarse = self._eval_power(gcc, self.coarse_ia, self.coarse_ie)
+            k = int(np.argmax(p_coarse))
+            ca, ce = np.unravel_index(k, p_coarse.shape)
+            c_ia, c_ie = int(self.coarse_ia[ca]), int(self.coarse_ie[ce])
 
-        # Softmax-style confidence from peak prominence
-        flat = power.ravel()
-        peak_idx = int(np.argmax(flat))
-        ia, ie = np.unravel_index(peak_idx, power.shape)
-        peak = float(flat[peak_idx])
-        mean = float(np.mean(flat))
-        std = float(np.std(flat)) + 1e-9
-        # Map z-score-ish score into [0, 1]
+            # Pass 2 — fine window ±1 coarse step around best coarse cell
+            m = self.coarse_multiplier
+            win_ia = np.arange(max(0, c_ia - m), min(n_az, c_ia + m + 1))
+            win_ie = np.arange(max(0, c_ie - m), min(n_el, c_ie + m + 1))
+            p_fine = self._eval_power(gcc, win_ia, win_ie)
+            k2 = int(np.argmax(p_fine))
+            fa, fe = np.unravel_index(k2, p_fine.shape)
+            best_ia, best_ie = int(win_ia[fa]), int(win_ie[fe])
+            peak = float(p_fine[fa, fe])
+            evaluated = np.concatenate([p_coarse.ravel(), p_fine.ravel()])
+
+        mean = float(np.mean(evaluated))
+        std = float(np.std(evaluated)) + 1e-9
         confidence = float(1.0 / (1.0 + np.exp(-(peak - mean) / std)))
 
         return {
-            "azimuth_deg": float(self.azimuths[ia]),
-            "elevation_deg": float(self.elevations[ie]),
+            "azimuth_deg": float(self.azimuths[best_ia]),
+            "elevation_deg": float(self.elevations[best_ie]),
             "confidence": confidence,
             "srp_peak": peak,
         }
@@ -188,7 +302,6 @@ class SRPPhatLocalizer:
 
         # Accept (samples, mics) or (mics, samples)
         if x.shape[1] == len(self.mic_ids):
-            # (samples, mics)
             channels = {mid: x[:, k] for k, mid in enumerate(self.mic_ids)}
         elif x.shape[0] == len(self.mic_ids):
             channels = {mid: x[k, :] for k, mid in enumerate(self.mic_ids)}

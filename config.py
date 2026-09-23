@@ -54,6 +54,16 @@ CONFIDENCE_THRESHOLD = 0.58   # ignore weak / noisy peaks
 CONFIDENCE_MOVE_THRESHOLD = 0.65  # only move HAT above this
 SRP_MEDIAN_WINDOW = 5         # median of last N peaks before Kalman
 SRP_MAX_JUMP_DEG = 25.0       # reject single-frame outliers vs last good
+SRP_ADAPTIVE_SEARCH = True    # coarse-to-fine search (False = legacy full dense grid)
+SRP_COARSE_STEP_MULTIPLIER = 3  # pass-1 step = this × AZIMUTH/ELEVATION_STEP_DEG
+SRP_VOLUME_NEIGHBORS = 1      # ±N fine cells averaged per candidate ("modified SRP-PHAT"); 0 = off
+
+# ── GCC-PHAT diffuseness-mask fallback (audio/gcc_phat_diffuse.py, not wired in) ──
+GCC_DIFFUSE_THRESHOLD = 0.6   # keep T-F bins with diffuseness < this (0..1); needs room tuning
+GCC_DIFFUSE_SUBFRAME = 512    # STFT sub-frame length used for CDR smoothing inside one SRP frame
+
+# ── Diagnostics ────────────────────────────────────────────────────────────
+VAD_DIAGNOSTIC_LOGGING = False  # opt-in VAD-gating validation logs (tracking drop / borderline chunks)
 
 # ── Kalman (heavy smoothing — reduce sudden jumps) ─────────────────────────
 KALMAN_DT = VAD_CHUNK_SAMPLES / SAMPLE_RATE
@@ -68,9 +78,12 @@ KALMAN_MAX_VEL_DEG_S = 30.0
 PCA9685_ADDRESS = 0x40
 TILT_CHANNEL = 0              # S0
 PAN_CHANNEL = 1               # S1
-# Pan: 0 = left, 90 = front (centered on array), 180 = right
+# Pan: 0 = left, 90 = front (centered on array), 150 = right-most
+# PAN_MAX is capped at 150 (not 180): the camera ribbon cable binds past ~150.
+# Mapping is piecewise around PAN_FRONT_DEG so "front" stays at exactly 90.
 PAN_MIN_DEG = 0.0
-PAN_MAX_DEG = 180.0
+PAN_MAX_DEG = 150.0
+PAN_FRONT_DEG = 90.0          # az = 0 → this pan angle
 # Tilt: 80 = highest (look up), 145 = eye-level front, 180 = lowest (look down)
 TILT_MIN_DEG = 80.0           # top / up
 TILT_MAX_DEG = 180.0          # bottom / down
@@ -87,5 +100,14 @@ STREAM_WIDTH = 1280
 STREAM_HEIGHT = 720
 STREAM_FPS = 25
 STREAM_BITRATE = 2_000_000
+
+# ── Camera (Raspberry Pi Camera Module 3 on the pan/tilt head) ─────────────
+CAMERA_ENABLED = True         # show live feed in the GUI (auto-off if no camera found)
+CAMERA_INDEX = 0              # Picamera2 camera number / V4L2 index (cam 0 = CSI port 0)
+CAMERA_PREVIEW_WIDTH = 640    # GUI preview size (keeps Pi CPU free for SRP-PHAT)
+CAMERA_PREVIEW_HEIGHT = 360
+CAMERA_FPS = 20               # preview frame rate
+CAMERA_HFLIP = False          # set True if the head is mounted mirrored
+CAMERA_VFLIP = False
 
 GUI_REFRESH_MS = 50

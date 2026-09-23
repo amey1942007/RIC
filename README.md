@@ -21,7 +21,22 @@ vad_srp_phat_pipeline.py              # ONLY CLI entry (--no-gui / --real-servos
 | `run_gui.sh` | Convenience launcher on Pi |
 | `vad_srp_phat_pipeline.py` | CLI / flags |
 | `pipeline/lecturer_tracker.py` | Core tracking logic (library, not a second app) |
-| `gui/live_dashboard.py` | Tk meters / DOA / pan-tilt display |
+| `gui/live_dashboard.py` | Tk control room: camera feed, meters, radar, pan-tilt |
+| `camera/pi_camera.py` | Camera Module 3 grabber (picamera2 → rpicam-vid → OpenCV) |
+
+## GUI controls
+
+| Control | Key | What it does |
+|---------|-----|--------------|
+| **MIC ON/OFF** | `M` | Mute the array — VAD/DOA stop, HAT holds position |
+| **SERVO AUTO/MANUAL** | `A` | MANUAL: sliders, `←→↑↓` nudge (2°), click a bearing on the radar |
+| **CENTRE** | `C` | Front pose: pan `PAN_FRONT_DEG` (90) / tilt `TILT_FRONT_DEG` (145) |
+| **CAM** | — | Start / stop the Camera Module 3 preview (cam index `CAMERA_INDEX` = 0) |
+| quit | `Q` | |
+
+The camera HUD shows the commanded pan/tilt, a green marker where the
+speaker is relative to the camera's aim, and a red TRACK dot while speech is
+being followed.
 
 ## Layout
 
@@ -31,6 +46,7 @@ RIC/
   vad_srp_phat_pipeline.py
   config.py
   gui/live_dashboard.py
+  camera/pi_camera.py
   audio/  control/  pipeline/
   overlays/ric-inmp441-4ch-overlay.dts
   scripts/check_rpi_4ch_mics.py
@@ -53,6 +69,13 @@ RIC/
 tilt=`S0`, pan=`S1`, I2C `0x40`. Brown=GND, Red=5V, Orange=PWM.
 
 **Do not assemble servos until home (0°)** — use interactive tool below.
+
+Servo window (config.py):
+
+| Axis | Min | Front | Max | Note |
+|------|-----|-------|-----|------|
+| Pan | 0 (left) | **90** | **150** (right) | capped at 150 — camera ribbon binds past it; az 0→+90 is compressed into 90→150 |
+| Tilt | 80 (up) | **145** | 180 (down) | 145 = camera level with the array |
 
 ## Install / run
 

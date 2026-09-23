@@ -29,7 +29,9 @@ if command -v apt-get >/dev/null 2>&1; then
     python3-venv python3-pip python3-tk python3-smbus \
     i2c-tools libportaudio2 portaudio19-dev \
     device-tree-compiler \
-    liblgpio-dev python3-lgpio swig || true
+    liblgpio-dev python3-lgpio swig \
+    python3-picamera2 python3-libcamera python3-pil python3-pil.imagetk \
+    rpicam-apps || true
 
   # Enable I2C for Waveshare Pan-Tilt HAT (PCA9685 @ 0x40)
   if command -v raspi-config >/dev/null 2>&1; then
@@ -38,10 +40,15 @@ if command -v apt-get >/dev/null 2>&1; then
   fi
 fi
 
-# Virtualenv
+# Virtualenv — with system site-packages so picamera2 / libcamera (apt-only,
+# used for the Camera Module 3 preview) are importable from the venv.
 if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
-  echo "==> creating .venv"
-  python3 -m venv "$ROOT/.venv"
+  echo "==> creating .venv (system-site-packages for picamera2)"
+  python3 -m venv --system-site-packages "$ROOT/.venv"
+elif grep -q 'include-system-site-packages = false' "$ROOT/.venv/pyvenv.cfg" 2>/dev/null; then
+  echo "==> enabling system-site-packages on existing .venv (picamera2)"
+  sed -i 's/include-system-site-packages = false/include-system-site-packages = true/' \
+    "$ROOT/.venv/pyvenv.cfg"
 fi
 # shellcheck disable=SC1091
 source "$ROOT/.venv/bin/activate"
@@ -62,6 +69,12 @@ if [[ "$ARCH" == "aarch64" || "$ARCH" == "armv7l" ]]; then
   python -m pip install adafruit-blinka adafruit-circuitpython-servokit \
     adafruit-circuitpython-pca9685 smbus2 || true
   echo "    Check HAT: sudo i2cdetect -y 1   (expect 0x40)"
+  echo "==> camera check (Camera Module 3, cam 0)"
+  python - <<'PY' || echo "    picamera2 not importable — GUI will fall back to rpicam-vid / no camera"
+from picamera2 import Picamera2
+cams = Picamera2.global_camera_info()
+print("    cameras:", [c.get("Model") for c in cams] or "none detected")
+PY
 fi
 
 echo "==> preload Silero VAD model"
