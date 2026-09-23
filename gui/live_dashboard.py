@@ -716,10 +716,13 @@ class LiveDashboard:
             gate = (f"Silero thr {cfg.VAD_THRESHOLD:.2f}   "
                     f"AGC={'on' if cfg.VAD_NORMALIZE else 'off'}")
         else:
-            gate = f"SILERO VAD OFF · level gate ≥{float(s.get('vad_gain') or 0):.4f}"
+            gate = (f"SILERO VAD OFF · gate ≥{float(s.get('vad_gain') or 0):.4f} "
+                    f"(floor {float(s.get('noise_floor') or 0):.4f})")
+        drops = int(s.get("audio_drops") or 0)
+        buf = f"   q{int(s.get('audio_queue') or 0)}" + (f" drop{drops}" if drops else "")
         self.vad_meta.configure(
             text=f"raw peak {float(s.get('vad_peak') or 0):.4f}   {gate}   "
-                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}"
+                 f"on≥{cfg.VAD_SPEECH_ON_CHUNKS} off≥{cfg.VAD_SPEECH_OFF_CHUNKS}{buf}"
         )
 
         # servo readouts + sliders (sync without triggering command)

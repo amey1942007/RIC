@@ -74,7 +74,13 @@ class LecturerTracker:
         self._vad_enabled = bool(getattr(cfg, "VAD_ENABLED", True))
         self._energy_gate = float(getattr(cfg, "ENERGY_GATE_PEAK", 0.004))
         self._energy_ratio = float(getattr(cfg, "ENERGY_GATE_RATIO", 3.0))
+        self._energy_max = float(getattr(cfg, "ENERGY_GATE_MAX", 0.012))
         self._noise_floor = self._energy_gate / max(1.0, self._energy_ratio)
+        chunk_s = cfg.VAD_CHUNK_SAMPLES / cfg.SAMPLE_RATE
+        win = max(10, int(float(getattr(cfg, "ENERGY_FLOOR_WINDOW_S", 2.0)) / chunk_s))
+        self._peak_hist: deque[float] = deque(maxlen=win)
+        self._floor_rise = float(getattr(cfg, "ENERGY_FLOOR_RISE_PER_S", 0.10)) * chunk_s
+        self._audio_drops = 0
         self.vad = None
         if self._vad_enabled:
             from audio.silero_vad import SileroVAD  # pulls in torch — only when wanted
@@ -171,6 +177,9 @@ class LecturerTracker:
         s["servo_manual"] = self._servo_manual
         s["pan_deg"] = float(self.servos.pan_deg)
         s["tilt_deg"] = float(self.servos.tilt_deg)
+        s["audio_drops"] = int(self._audio_drops)
+        s["audio_queue"] = int(self._audio_q.qsize())
+        s["noise_floor"] = float(self._noise_floor)
         return s
 
     # ── GUI controls ───────────────────────────────────────────────────────
@@ -296,7 +305,10 @@ class LecturerTracker:
             try:
                 self._audio_q.put_nowait(indata.copy())
             except queue.Full:
-                pass
+                # processing thread is behind; drop this block rather than stall capture
+                self._audio_drops += 1
+                if self._audio_drops % 50 == 1:
+                    log.warning("audio queue full — dropped %d blocks so far", self._audio_drops)
 
         try:
             with sd.InputStream(
@@ -391,17 +403,29 @@ class LecturerTracker:
     def _level_gate(self, mono_chunk: np.ndarray) -> dict[str, Any]:
         """
         Silero-free gate (config.VAD_ENABLED = False): active when the chunk's
-        peak level (after high-pass) exceeds max(ENERGY_GATE_PEAK, ratio × noise
-        floor). The floor is a slow EMA of quiet-chunk peaks (fast to fall, slow to
-        rise) so a talker cannot drag it up. Returns the same dict shape as
-        SileroVAD.classify; "probability" is peak / threshold clipped to 1.
+        peak level (after high-pass) exceeds
+            min(ENERGY_GATE_MAX, max(ENERGY_GATE_PEAK, ratio × noise floor)).
+
+        The floor is learned only while the pipeline is idle (``_tracking`` False,
+        i.e. not in speech hangover) as the 20th percentile of recent chunk peaks.
+        It drops immediately but rises rate-limited, so a talker's between-word
+        lows can never push the gate above their own voice (the earlier EMA did
+        exactly that and locked speech out until the next pause).
+        Returns the same dict shape as SileroVAD.classify.
         """
         peak = float(np.max(np.abs(mono_chunk))) if mono_chunk.size else 0.0
+        if not self._tracking:
+            self._peak_hist.append(peak)
+            if len(self._peak_hist) >= 10:
+                target = float(np.percentile(self._peak_hist, 20))
+                if target < self._noise_floor:
+                    self._noise_floor = target
+                else:
+                    step = max(self._floor_rise * self._noise_floor, 1e-6)
+                    self._noise_floor = min(target, self._noise_floor + step)
         thr = max(self._energy_gate, self._energy_ratio * self._noise_floor)
+        thr = min(self._energy_max, thr)
         active = peak >= thr
-        if not active:
-            a = 0.02 if peak > self._noise_floor else 0.2
-            self._noise_floor += a * (peak - self._noise_floor)
         return {
             "label": "SOUND" if active else "QUIET",
             "human_speech": active,

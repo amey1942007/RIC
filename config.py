@@ -18,6 +18,13 @@ VAD_CHUNK_SAMPLES = 512       # Silero window @ 16 kHz
 VAD_ENABLED = False
 ENERGY_GATE_PEAK = 0.004      # absolute minimum peak to count as sound
 ENERGY_GATE_RATIO = 3.0       # ... and at least this × the running noise floor
+ENERGY_GATE_MAX = 0.012       # hard cap on the gate — quiet speech at 2 m is ~0.008–0.02
+# Noise floor is learned ONLY while idle (not tracking / out of hangover), from the 20th
+# percentile of the last ENERGY_FLOOR_WINDOW_S of chunk peaks; it may fall instantly but
+# rise no faster than ENERGY_FLOOR_RISE_PER_S (fraction/s). Prevents the gate chasing the
+# talker's own between-word lows and locking speech out (observed Sep 23).
+ENERGY_FLOOR_WINDOW_S = 2.0
+ENERGY_FLOOR_RISE_PER_S = 0.10
 # Slightly stricter gate + hangover reduces clap/noise yanking the HAT
 VAD_THRESHOLD = 0.58
 # Measured on the Pi (Sep 23): raw INMP441 speech peaks ≈0.02 → Silero never fires
