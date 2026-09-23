@@ -56,8 +56,10 @@ class ServoController:
                 self.simulate = True
                 self.kit = None
 
-        # On first boot after home, load last pose; otherwise mid look-ahead
         self.pan_deg, self.tilt_deg = self._load_position()
+        self._cmd_pan = float(self.pan_deg)
+        self._cmd_tilt = float(self.tilt_deg)
+        self._last_apply_t = 0.0
         if not self.simulate:
             self._apply(self.pan_deg, self.tilt_deg, force=True)
         log.info(
@@ -181,8 +183,11 @@ class ServoController:
         elevation_deg: float,
         confidence: float = 1.0,
     ) -> Tuple[float, float]:
-        """Pipeline entry: SRP angles → HAT PWM (gated by confidence)."""
-        if confidence < cfg.CONFIDENCE_THRESHOLD:
+        """Pipeline entry: SRP angles → HAT PWM (gated + rate-limited)."""
+        move_thr = float(
+            getattr(cfg, "CONFIDENCE_MOVE_THRESHOLD", cfg.CONFIDENCE_THRESHOLD)
+        )
+        if confidence < move_thr:
             return self.pan_deg, self.tilt_deg
 
         target_pan, target_tilt = self.map_angles(azimuth_deg, elevation_deg)
@@ -191,14 +196,39 @@ class ServoController:
         if d_pan < cfg.DEAD_ZONE_DEG and d_tilt < cfg.DEAD_ZONE_DEG:
             return self.pan_deg, self.tilt_deg
 
-        self._apply(target_pan, target_tilt, force=False)
+        # EMA toward target, then rate-limit degrees/second
+        alpha = float(getattr(cfg, "SERVO_EMA_ALPHA", 0.25))
+        self._cmd_pan = (1.0 - alpha) * self._cmd_pan + alpha * target_pan
+        self._cmd_tilt = (1.0 - alpha) * self._cmd_tilt + alpha * target_tilt
+        self._apply_rate_limited(self._cmd_pan, self._cmd_tilt)
         return self.pan_deg, self.tilt_deg
 
+    def _apply_rate_limited(self, pan: float, tilt: float) -> None:
+        import time
+
+        now = time.monotonic()
+        dt = now - self._last_apply_t if self._last_apply_t > 0 else cfg.KALMAN_DT
+        self._last_apply_t = now
+        dt = max(1e-3, min(dt, 0.2))
+        max_step = float(getattr(cfg, "SERVO_MAX_SPEED_DEG_S", 45.0)) * dt
+
+        pan = float(np_clip(pan, cfg.PAN_MIN_DEG, cfg.PAN_MAX_DEG))
+        tilt = float(np_clip(tilt, cfg.TILT_MIN_DEG, cfg.TILT_MAX_DEG))
+        d_pan = pan - self.pan_deg
+        d_tilt = tilt - self.tilt_deg
+        if abs(d_pan) > max_step:
+            pan = self.pan_deg + max_step * (1.0 if d_pan > 0 else -1.0)
+        if abs(d_tilt) > max_step:
+            tilt = self.tilt_deg + max_step * (1.0 if d_tilt > 0 else -1.0)
+        self._apply(pan, tilt, force=False)
+
     def _apply(self, pan: float, tilt: float, force: bool) -> None:
-        pan = float(np_clip(pan, 0.0, 180.0))
-        tilt = float(np_clip(tilt, 0.0, 180.0))
-        # Soft operating limits during tracking (home may still use 0°)
-        if not force:
+        # force=True → full 0..180 (interactive probe / Waveshare home)
+        # force=False → hardware-safe window from config (after probe + save)
+        if force:
+            pan = float(np_clip(pan, 0.0, 180.0))
+            tilt = float(np_clip(tilt, 0.0, 180.0))
+        else:
             pan = float(np_clip(pan, cfg.PAN_MIN_DEG, cfg.PAN_MAX_DEG))
             tilt = float(np_clip(tilt, cfg.TILT_MIN_DEG, cfg.TILT_MAX_DEG))
 

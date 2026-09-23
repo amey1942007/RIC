@@ -85,3 +85,17 @@ The pipeline sends SRP azimuth/elevation to the HAT every speech frame (GUI show
 ./run_gui.sh --simulate-servos # audio + GUI, no PWM
 ./run_gui.sh --no-gui --real-servos
 ```
+
+## Find servo hardware limits
+
+```bash
+.venv/bin/python scripts/servo_interactive.py
+# pan 90 | tilt 40 | +pan 5 | setpanmin 25 | settiltmax 140 | save
+```
+
+Any tracking command outside `PAN_*` / `TILT_*` is clamped to those extremes.
+
+## Mic height
+
+Mount the **centre of the 6 cm square near mouth height** (~1.4–1.6 m standing,
+or seated speaking height). Eye-level is fine. Not floor / not high ceiling.
