@@ -160,14 +160,16 @@ PERSON_MODEL_PATH = Path(__file__).resolve().parent / "models" / "yolov8n.onnx"
 FACE_MODEL_PATH = PERSON_MODEL_PATH  # alias kept for older imports
 VISION_FPS = 8                # detector rate (Pi 5 CPU: YOLOv8n @320 ≈ 40–80 ms)
 VISION_DETECT_WIDTH = 320     # frames are letterboxed to this square before YOLO
-VISION_SCORE_MIN = 0.40       # person-class confidence
-VISION_EMA_ALPHA = 0.35       # smoothing of the tracked person centre (per detection)
-VISION_STALE_S = 1.2          # box older than this is treated as "not visible"
-VISION_AZ_SIGN = 1            # +1: person on the image's right → positive azimuth (high pan)
-LOCK_AFTER_SPEECH_S = 6.0     # continuous speech from one bearing before locking
+VISION_SCORE_MIN = 0.28       # person-class confidence (sitting / 3/4 view still counts)
+VISION_EMA_ALPHA = 0.40       # smoothing of the tracked person centre (per detection)
+VISION_STALE_S = 2.5          # keep last box this long so a missed frame does not drop follow
+VISION_AZ_SIGN = 1            # +1: person on the image's RIGHT → raise pan (user: right = more angle)
+VISION_FOLLOW_GAIN = 1.0      # pan_error = gain × degrees the box is off-centre
+VISION_CENTER_DEAD_DEG = 1.5  # do not hunt when the person is already centred
+LOCK_AFTER_SPEECH_S = 4.0     # continuous speech from one bearing before locking
 LOCK_BEARING_TOL_DEG = 20.0   # bearing wander allowed while accumulating lock time
 LOCK_FACE_MAX_OFF_DEG = 30.0  # face must be within this of image centre to be adopted as the target
-UNLOCK_SILENCE_S = 20.0       # no speech for this long → back to AUDIO mode (servo holds)
+UNLOCK_SILENCE_S = 20.0       # no speech AND no person in frame for this long → AUDIO again
 SPEAKER_CHANGE_S = 4.0        # sustained speech > FUSION_MAX_DISAGREE_DEG away → unlock (new talker)
 FUSION_AUDIO_WEIGHT = 0.3     # weight of audio bearing when both cues agree (visual gets the rest)
 FUSION_MAX_DISAGREE_DEG = 25.0  # beyond this the cues are not averaged; visual wins (audio = reflection / other)

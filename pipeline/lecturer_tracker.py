@@ -618,9 +618,6 @@ class LecturerTracker:
             face=face,
             pan_deg=float(self.servos.pan_deg),
         )
-        if lock.mode == MODE_LOCKED and self._prev_lock_mode != MODE_LOCKED:
-            if self.face_tracker is not None:
-                self.face_tracker.reacquire()
         self._prev_lock_mode = lock.mode
         if lock.mode == MODE_LOCKED and lock.fused_az is not None:
             az, el = float(lock.fused_az), float(lock.fused_el if lock.fused_el is not None else el)
@@ -628,21 +625,23 @@ class LecturerTracker:
 
         if measurement is not None:
             self._held_az, self._held_el = float(az), float(el)
-        elif lock.mode == MODE_LOCKED and lock.fused_az is not None and lock.source in ("fused", "visual", "audio"):
+        elif lock.mode == MODE_LOCKED and lock.fused_az is not None and lock.source != "hold":
             self._held_az, self._held_el = float(az), float(el)
         elif self._held_az is not None:
             az, el = float(self._held_az), float(self._held_el)
 
-        # AUDIO: move only on a fresh raw-speech peak (not hangover / silence).
-        # LOCKED: steer only while the person is still visible or audio is live —
-        # never drive to 0° because the detector missed a frame.
-        if lock.mode == MODE_LOCKED and lock.fused_az is not None and lock.source != "hold":
-            servo_conf = max(float(lock.fused_conf), move_thr)
-        else:
-            servo_conf = conf if (raw_speech and conf >= move_thr and measurement) else 0.0
+        # LOCKED + person in frame: follow the box (works while silent).
+        # AUDIO: move only on a fresh raw-speech peak — never on hangover SRP.
         if self._servo_manual:
             pan, tilt = self.servos.pan_deg, self.servos.tilt_deg
+        elif lock.mode == MODE_LOCKED and lock.target_pan is not None:
+            with self._servo_lock:
+                pan, tilt = self.servos.follow_pan(
+                    float(lock.target_pan),
+                    dead_zone=float(getattr(cfg, "VISION_CENTER_DEAD_DEG", 1.5)),
+                )
         else:
+            servo_conf = conf if (raw_speech and conf >= move_thr and measurement) else 0.0
             with self._servo_lock:
                 pan, tilt = self.servos.set_direction(az, el, confidence=servo_conf)
 

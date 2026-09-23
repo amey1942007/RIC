@@ -244,6 +244,22 @@ class ServoController:
         self._apply_rate_limited(self._cmd_pan, self._cmd_tilt)
         return self.pan_deg, self.tilt_deg
 
+    def follow_pan(self, target_pan: float, dead_zone: Optional[float] = None) -> Tuple[float, float]:
+        """
+        Locked visual follow: drive pan toward ``target_pan`` (servo degrees).
+        No audio-confidence gate. Right = higher pan, left = lower (config window).
+        """
+        lo, hi = float(cfg.PAN_MIN_DEG), float(cfg.PAN_MAX_DEG)
+        target_pan = float(np_clip(target_pan, lo, hi))
+        dz = float(cfg.DEAD_ZONE_DEG if dead_zone is None else dead_zone)
+        if abs(target_pan - self.pan_deg) < dz:
+            return self.pan_deg, self.tilt_deg
+        alpha = min(0.45, float(getattr(cfg, "SERVO_EMA_ALPHA", 0.25)) + 0.12)
+        self._cmd_pan = (1.0 - alpha) * self._cmd_pan + alpha * target_pan
+        self._cmd_tilt = float(self.front_pose()[1]) if not bool(getattr(cfg, "TRACK_TILT", True)) else self._cmd_tilt
+        self._apply_rate_limited(self._cmd_pan, self._cmd_tilt)
+        return self.pan_deg, self.tilt_deg
+
     def _apply_rate_limited(self, pan: float, tilt: float) -> None:
         import time
 

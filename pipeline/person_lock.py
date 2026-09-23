@@ -3,9 +3,11 @@ Person-lock state machine: AUDIO → LOCKED → AUDIO.
 
 AUDIO  — SRP-PHAT steers (existing pipeline). Lock time accumulates while
          one talker speaks from a stable bearing.
-LOCKED — entered after LOCK_AFTER_SPEECH_S. The camera face track and the
-         audio bearing are fused (never vision-only when audio is live).
-         Left after UNLOCK_SILENCE_S of no speech, or a sustained speaker change.
+LOCKED — entered after LOCK_AFTER_SPEECH_S. While locked the camera follows
+         the person box even if they stop talking (visual pan servo:
+         image-right → higher pan, image-left → lower pan). Audio is fused
+         only when they are speaking. Unlock after UNLOCK_SILENCE_S with
+         *no person in frame* (being quiet but still visible does not unlock).
 
 Nothing here moves the servos; the tracker applies the fused bearing.
 """
@@ -17,6 +19,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import config as cfg
+from control.servo_controller import ServoController
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ class LockSnapshot:
     face_visible: bool = False
     face_box: Optional[tuple] = None
     face_rel_az: Optional[float] = None
+    target_pan: Optional[float] = None  # servo deg; set while LOCKED + person visible
     reason: str = ""
 
 
@@ -119,7 +123,8 @@ class PersonLock:
                 mode=MODE_AUDIO, enabled=False, source="audio", reason="disabled"
             )
 
-        if speech:
+        # Quiet but still in frame is NOT silence — keep the lock and follow.
+        if speech or face_vis:
             self._silence_s = 0.0
         else:
             self._silence_s += dt
@@ -199,23 +204,33 @@ class PersonLock:
         raw_az = raw_el = None
         source = "hold"
         conf = 0.7
+        target_pan = None
         audio_ok = bool(speech and audio_az is not None and audio_conf >= float(cfg.CONFIDENCE_THRESHOLD))
+        p_lo, p_hi = float(cfg.PAN_MIN_DEG), float(cfg.PAN_MAX_DEG)
+        dead = float(getattr(cfg, "VISION_CENTER_DEAD_DEG", 1.5))
+        gain = float(getattr(cfg, "VISION_FOLLOW_GAIN", 1.0))
 
-        if audio_ok and vis_az is not None:
-            daz = abs(wrap_deg(audio_az - vis_az))
-            if daz <= disagree:
-                raw_az = (1.0 - w_aud) * vis_az + w_aud * audio_az
-                raw_el = (1.0 - w_aud) * (vis_el or 0.0) + w_aud * (audio_el or 0.0)
-                source = "fused"
-                conf = min(1.0, 0.55 * audio_conf + 0.45)
+        if face_vis:
+            # Visual servo in *pan* space (not world az): person to the right of
+            # the image centre → raise pan; to the left → lower pan.
+            err = float(face.rel_az_deg)  # already × VISION_AZ_SIGN
+            visual_pan = float(max(p_lo, min(p_hi, pan_deg + gain * err)))
+            if abs(err) < dead:
+                visual_pan = float(pan_deg)
+            if audio_ok:
+                audio_pan, _ = ServoController.map_angles(audio_az, audio_el or 0.0)
+                if abs(audio_pan - visual_pan) <= 25.0:
+                    target_pan = (1.0 - w_aud) * visual_pan + w_aud * audio_pan
+                    source, conf = "fused", min(1.0, 0.55 * audio_conf + 0.45)
+                else:
+                    target_pan, source, conf = visual_pan, "visual", 0.85
             else:
-                # cues disagree: keep the face (audio is often a reflection / other talker)
-                raw_az, raw_el, source, conf = vis_az, vis_el, "visual", 0.75
-        elif vis_az is not None:
-            raw_az, raw_el, source, conf = vis_az, vis_el, "visual", 0.72
+                target_pan, source, conf = visual_pan, "visual", 0.85
+            raw_az = pan_to_azimuth(target_pan)
+            raw_el = vis_el
         elif audio_ok:
             raw_az, raw_el, source, conf = audio_az, audio_el, "audio", audio_conf
-        # else: hold last fused
+            target_pan, _ = ServoController.map_angles(audio_az, audio_el or 0.0)
 
         if raw_az is not None:
             if self._fused_az is None:
@@ -239,5 +254,6 @@ class PersonLock:
             face_visible=face_vis,
             face_box=face_box,
             face_rel_az=face_rel,
+            target_pan=target_pan,
             reason=self._reason,
         )
